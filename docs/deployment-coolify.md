@@ -55,13 +55,38 @@ The intended test URL is **https://add.7rb.nl**. Assign that domain to the
 public domain: Next.js proxies `/api/*`, `/health`, `/ready` and `/docs` to the
 internal `api:8000` service. PostgreSQL stays internal as well.
 
-In Coolify, use the repository's `docker-compose.yml` as the base and set the
-variables from `.env.coolify.example`. The `docker-compose.coolify.yml` override
-can be selected when the Coolify version supports compose overrides; it removes
-the host-published API port and pins the browser API URL to the test domain.
+In Coolify, use the repository's `docker-compose.yml` as the compose location and
+set the variables from `.env.coolify.example`. The `docker-compose.coolify.yml`
+override removes the host-published API port and pins the browser API URL to the
+test domain; because Coolify accepts exactly one compose location, load it as a
+second file through the custom build and start commands (see below).
 For the production resource use `docker-compose.production.yml`, or set
 `NEXT_PUBLIC_API_URL=https://add.rubenbarels.nl` and
 `API_CORS_ORIGINS=https://add.rubenbarels.nl` in that Coolify environment.
+
+### Verified Coolify resource settings
+
+The test resource deploys with these settings; both are required, and the
+deployment fails before anything is built without them:
+
+| setting | value |
+| --- | --- |
+| Docker Compose Location | `/docker-compose.yml` |
+| Custom Docker Compose Build Command | `docker compose -f docker-compose.yml -f docker-compose.coolify.yml build --pull` |
+| Custom Docker Compose Start Command | `docker compose -f docker-compose.yml -f docker-compose.coolify.yml up -d` |
+| Domain | the `web` service, container port `3000` |
+
+- Coolify's default compose location is `/docker-compose.yaml`. This repository
+  ships `docker-compose.yml`, so the default stops the deployment with
+  `Docker Compose file not found at: /docker-compose.yaml`.
+- The base compose file publishes the API on host port `8000`. On a shared
+  Coolify host that port is already taken, and `docker compose up` fails with
+  `Bind for 0.0.0.0:8000 failed: port is already allocated`. The
+  `docker-compose.coolify.yml` override resets that publication
+  (`ports: !reset []`) and pins `NEXT_PUBLIC_API_URL` to the test domain, so it
+  has to be part of the same `docker compose` invocation. The domain is routed
+  to `web:3000` by Coolify's proxy; `api` and `db` stay internal and need no
+  published host port.
 
 1. Create a private PostgreSQL volume (the named `add_postgres` volume is persistent).
 2. Set `POSTGRES_PASSWORD`, `ADD_API_TOKEN`, `LOCAL_LOGIN_PASSWORD`, `SESSION_SECRET` and `CREDENTIAL_ENCRYPTION_KEY` to newly generated secrets.
