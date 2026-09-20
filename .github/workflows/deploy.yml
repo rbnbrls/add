@@ -22,7 +22,7 @@ jobs:
 
       - name: Load deployment targets
         shell: bash
-        run: cat deployment/targets.env >> "$GITHUB_ENV"
+        run: awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/ { print }' deployment/targets.env >> "$GITHUB_ENV"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -66,7 +66,7 @@ jobs:
 
       - name: Load deployment targets
         shell: bash
-        run: cat deployment/targets.env >> "$GITHUB_ENV"
+        run: awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/ { print }' deployment/targets.env >> "$GITHUB_ENV"
 
       - name: Trigger Coolify test deployment
         env:
@@ -96,7 +96,7 @@ jobs:
 
       - name: Load deployment targets
         shell: bash
-        run: cat deployment/targets.env >> "$GITHUB_ENV"
+        run: awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/ { print }' deployment/targets.env >> "$GITHUB_ENV"
 
       - name: Trigger Coolify production deployment
         env:
