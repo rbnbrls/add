@@ -27,6 +27,7 @@ from .models import AccountabilitySession, Action, ActionStatus, AppPreference, 
 from .schemas import AccountabilityFinishRequest, AccountabilityOut, AccountabilityStartRequest, ActionCreate, ActionOut, AppPreferenceOut, AppPreferenceUpdate, BlockTaskRequest, CompleteActionRequest, CompletionOut, DailyReviewCompleteOut, DailyReviewCompleteRequest, DayCheckRequest, DecompositionApprovalRequest, DecompositionApprovalOut, DecompositionProposalOut, DecompositionRequest, FocusDuration, FreeLLMModelCatalogOut, HAContext, HAEvent, LLMSettingsOut, MessageDraft, NaturalLanguageCaptureRequest, NaturalLanguageCaptureResponse, OfflineCompletion, PlanBlockCreate, PlanBlockOut, PlanSuggestionRequest, PlanningDecisionOut, ReminderSettings, ResolveBlockedActionRequest, ReplanRequest, RoutineCreate, RoutineOut, SendMessageRequest, SessionResult, SmartViewCreate, SmartViewFilters, SmartViewOut, StartActionRequest, StartOut, SuggestionApproval, SuggestionOut, TaskCreate, TaskOut, TaskUpdate, TaskSuggestion, TodayStatus, TextRewriteRequest, TextRewriteResponse, ToneAnalysisRequest, ToneAnalysisResponse, WorkflowSummaryOut
 from .security import credential_box, read_encrypted_credential
 from .text_assistance import analyze_tone, rewrite_text
+from .github_issue import create_github_issue
 
 app = FastAPI(title="ADD API", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.api_cors_origins.split(",")], allow_methods=["*"], allow_headers=["*"], allow_credentials=True)
@@ -41,7 +42,7 @@ class OperationalMiddleware(BaseHTTPMiddleware):
         request.state.request_id = request_id
         key = (request.client.host if request.client else "unknown", request.url.path)
         now = time.monotonic()
-        if request.url.path.startswith(("/api/connectors/", "/api/mcp/")):
+        if request.url.path.startswith(("/api/connectors/", "/api/mcp/", "/api/feedback")):
             recent = [stamp for stamp in _rate_buckets.get(key, []) if stamp > now - 60]
             if len(recent) >= 30:
                 response = JSONResponse({"detail": "rate limit exceeded", "request_id": request_id}, status_code=429, headers={"X-Request-ID": request_id, "Retry-After": "60"})
@@ -80,6 +81,36 @@ def auth(x_add_token: str | None = Header(default=None), add_session: str | None
     if account or settings.local_login_password:
         if add_session != settings.session_secret: raise HTTPException(401, "login required")
     elif settings.add_api_token != "change-me" and x_add_token != settings.add_api_token: raise HTTPException(401, "invalid token")
+
+
+@app.post("/api/feedback", dependencies=[Depends(auth)])
+async def feedback(payload: dict):
+    """Turn user feedback into a labelled GitHub issue."""
+    kind = str(payload.get("type") or "feature").strip().lower()
+    title = str(payload.get("title") or "").strip()
+    description = str(payload.get("description") or "").strip()
+    if kind not in {"bug", "feature"}:
+        raise HTTPException(422, "type must be bug or feature")
+    if not title:
+        raise HTTPException(422, "title is required")
+    if not description:
+        raise HTTPException(422, "description is required")
+    if len(title) > 160 or len(description) > 4000:
+        raise HTTPException(422, "feedback is too long")
+    if not settings.github_token:
+        raise HTTPException(503, "GitHub feedback is not configured")
+
+    label = "bug" if kind == "bug" else "enhancement"
+    result = await create_github_issue(
+        token=settings.github_token,
+        repository=settings.github_repo,
+        title=f"[{kind.upper()}] {title}",
+        body=f"## Feedback uit ADD\n\n**Type:** {kind}\n\n---\n\n{description}",
+        labels=[label, "feedback"],
+    )
+    if not result.success:
+        raise HTTPException(502 if result.status_code else 503, result.error or "feedback kon niet worden verzonden")
+    return {"success": True, "issue_url": result.issue_url, "issue_number": result.issue_number}
 
 
 def ha_connection(db: Session) -> dict:

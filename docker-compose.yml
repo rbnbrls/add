@@ -29,6 +29,8 @@ services:
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30}
       LLM_CREDENTIAL_PROVIDER: ${LLM_CREDENTIAL_PROVIDER:-llm}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_REPO: ${GITHUB_REPO:-rbnbrls/add}
     depends_on:
       db:
         condition: service_healthy

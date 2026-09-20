@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     llm_model: str = ""
     llm_timeout_seconds: float = 30
     llm_credential_provider: str = "llm"
+    github_token: str = ""
+    github_repo: str = "rbnbrls/add"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
