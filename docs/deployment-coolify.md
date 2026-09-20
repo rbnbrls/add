@@ -22,10 +22,25 @@ de webhook een deployment kan starten, maar dat een geaccepteerde webhook op
 zichzelf niet bewijst dat de deployment gezond is; daarom volgt de expliciete
 URL-verificatie in de workflow. [Coolify deploy webhooks](https://coolify.io/docs/core/automation/deploy-webhooks)
 
-Maak in GitHub Actions de volgende secrets aan:
+Maak in GitHub Actions de volgende repository-secrets aan:
 
-- `COOLIFY_TEST_WEBHOOK` en `COOLIFY_TEST_TOKEN`
-- `COOLIFY_PRODUCTION_WEBHOOK` en `COOLIFY_PRODUCTION_TOKEN`
+- `COOLIFY_TEST_WEBHOOK` en `COOLIFY_TEST_TOKEN` — verplicht voor de testjob. Een
+  authenticated deploy webhook heeft de vorm
+  `https://dev.7rb.nl/api/v1/deploy?uuid=<app-uuid>` en wordt aangeroepen met
+  `Authorization: Bearer <coolify-api-token>`; de waarden horen bij de Coolify-app
+  `add-test` (`https://add.7rb.nl`). Zonder deze twee secrets faalt de testjob met
+  een expliciete foutmelding in plaats van een lege webhook.
+- `COOLIFY_PRODUCTION_WEBHOOK` en `COOLIFY_PRODUCTION_TOKEN` — nog niet van
+  toepassing: er bestaat nog geen productie-Coolify-resource voor deze repository.
+
+De productiejob controleert eerst of beide productiesecrets aanwezig zijn. Zolang
+dat niet zo is slaat hij de deployment en de productieverificatie over en plaatst
+hij een notice in de run; een push naar `main` blijft daardoor groen zonder te doen
+alsof er gepromoveerd is. Zodra er een productie-resource bestaat en beide secrets
+staan, draait de volledige promotiepoort (test → productie) ongewijzigd.
+`PRODUCTION_URL` in [`deployment/targets.env`](../deployment/targets.env) blijft
+voor die situatie staan; `https://add.rubenbarels.nl` serveert op dit moment nog
+niets.
 
 Gebruik voor de production environment bij voorkeur ook een verplichte GitHub
 environment approval. Dat is een extra menselijke veiligheidsrem; de codepoort
