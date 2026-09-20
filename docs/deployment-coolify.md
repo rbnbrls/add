@@ -93,6 +93,11 @@ deployment fails before anything is built without them:
 3. Set `SECURE_COOKIES=true`, `API_CORS_ORIGINS=https://add.7rb.nl` and `NEXT_PUBLIC_API_URL=https://add.7rb.nl`.
 4. Configure the `web` service domain as `add.7rb.nl` on port `3000`; enable HTTPS in Coolify.
 5. Keep the API and PostgreSQL private. The API is reachable through the web proxy at `/api/*`.
+
+Voor de feedbackknop configureer je op de API-service `GITHUB_TOKEN` (een token met
+issues-rechten op de repository) en `GITHUB_REPO` als `owner/repository` (standaard
+`rbnbrls/add`). De token blijft server-side; de browser ontvangt alleen de aangemaakte
+issue-link.
 6. Configure health checks at `/health` and the web root.
 7. Back up PostgreSQL before upgrades.
 
