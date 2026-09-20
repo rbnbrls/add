@@ -1,0 +1,12 @@
+/.kilo
+
+# Local environments and generated artifacts
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Frontend dependencies and build output
+node_modules/
+.next/
+out/

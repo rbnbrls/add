@@ -1,0 +1,10 @@
+services:
+  api:
+    ports: !reset []
+  web:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: https://add.7rb.nl
+    environment:
+      NEXT_PUBLIC_API_URL: https://add.7rb.nl

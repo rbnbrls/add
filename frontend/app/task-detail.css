@@ -1,0 +1,7 @@
+.subtask-checklist{border:0;margin:14px 0;padding:0;display:grid;gap:8px}
+.subtask-checklist legend{font-size:13px;color:#667085;margin-bottom:6px}
+.subtask-check{display:flex!important;flex-direction:row!important;align-items:flex-start;gap:12px;padding:12px 14px;border:1px solid #e5e0d7;border-radius:12px;background:#fff;color:#17202a!important;cursor:pointer}
+.subtask-check:hover{background:#f6f3ed}
+.subtask-check input{width:20px;height:20px;min-height:20px;margin:1px 0 0;flex:0 0 auto}
+.subtask-check span{display:grid;gap:3px}.subtask-check small{color:#667085}.subtask-done{text-decoration:line-through;color:#667085}
+.existing-subtasks{margin-top:4px}.existing-subtasks .subtask-check{border:0;border-top:1px solid #eee8de;border-radius:0;padding:12px 0}

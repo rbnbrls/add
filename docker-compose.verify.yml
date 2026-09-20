@@ -1,0 +1,9 @@
+services:
+  api:
+    ports: !override
+      - "18000:8000"
+  web:
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:18000
+    ports: !override
+      - "13000:3000"

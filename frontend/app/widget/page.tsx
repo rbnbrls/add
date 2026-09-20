@@ -1,0 +1,6 @@
+"use client";
+import { useEffect, useState } from "react";
+
+const API=process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000";
+type Widget={next_action:{text:string;estimated_minutes:number;energy:string}|null;open_proposals:number;capture_url:string;review_url:string;execute_url:string;read_only:boolean};
+export default function Widget(){const[data,setData]=useState<Widget|null>(null),[error,setError]=useState("");useEffect(()=>{fetch(`${API}/api/widget`).then(r=>r.ok?r.json():Promise.reject()).then(setData).catch(()=>setError("Widget kon niet worden geladen."))},[]);return <main className="widget-shell"><header><span className="logo">ADD</span><span>Widget</span><a className="lab-link" href="/">NU</a></header>{data?<section className="hero"><p className="eyebrow">NEXT ACTION</p><h1>{data.next_action?.text||"Geen actie nodig."}</h1>{data.next_action&&<p className="meta">{data.next_action.estimated_minutes} minuten · {data.next_action.energy} energie</p>}<a className="primary-link" href={data.next_action?data.execute_url:data.capture_url}>{data.next_action?"Open Do":"Snel vastleggen"}</a><p className="meta">{data.open_proposals} open voorstel{data.open_proposals===1?"":"len"} · read-only widget</p></section>:<section className="hero"><p className="meta">Widget laden…</p></section>}{error&&<p className="message">{error}</p>}</main>}

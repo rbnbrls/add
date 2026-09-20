@@ -1,0 +1,115 @@
+name: Build, test, promote
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: add-deployment-main
+  cancel-in-progress: false
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Load deployment targets
+        shell: bash
+        run: cat deployment/targets.env >> "$GITHUB_ENV"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r backend/requirements.txt
+
+      - name: Run backend tests
+        working-directory: backend
+        run: pytest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        run: |
+          source deployment/targets.env
+          export NEXT_PUBLIC_API_URL="$TEST_URL"
+          cd frontend
+          npm ci
+          npm run build
+
+      - name: Verify Docker deployment path
+        run: ./scripts/verify-fresh-upgrade.sh
+
+  deploy-test:
+    name: Deploy and verify test
+    needs: build-and-test
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    environment: test
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Load deployment targets
+        shell: bash
+        run: cat deployment/targets.env >> "$GITHUB_ENV"
+
+      - name: Trigger Coolify test deployment
+        env:
+          COOLIFY_WEBHOOK: ${{ secrets.COOLIFY_TEST_WEBHOOK }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TEST_TOKEN }}
+        run: |
+          test -n "$COOLIFY_WEBHOOK"
+          test -n "$COOLIFY_TOKEN"
+          curl --fail-with-body --request POST "$COOLIFY_WEBHOOK" \
+            --header "Authorization: Bearer $COOLIFY_TOKEN"
+
+      - name: Verify test deployment
+        env:
+          DEPLOYMENT_ATTEMPTS: "36"
+          DEPLOYMENT_WAIT_SECONDS: "10"
+        run: DEPLOYMENT_URL="$TEST_URL" ./scripts/verify-public-deployment.sh
+
+  deploy-production:
+    name: Deploy production after test
+    needs: deploy-test
+    if: ${{ github.ref == 'refs/heads/main' && needs.deploy-test.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Load deployment targets
+        shell: bash
+        run: cat deployment/targets.env >> "$GITHUB_ENV"
+
+      - name: Trigger Coolify production deployment
+        env:
+          COOLIFY_WEBHOOK: ${{ secrets.COOLIFY_PRODUCTION_WEBHOOK }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_PRODUCTION_TOKEN }}
+        run: |
+          test -n "$COOLIFY_WEBHOOK"
+          test -n "$COOLIFY_TOKEN"
+          curl --fail-with-body --request POST "$COOLIFY_WEBHOOK" \
+            --header "Authorization: Bearer $COOLIFY_TOKEN"
+
+      - name: Verify production deployment
+        env:
+          DEPLOYMENT_ATTEMPTS: "36"
+          DEPLOYMENT_WAIT_SECONDS: "10"
+        run: DEPLOYMENT_URL="$PRODUCTION_URL" ./scripts/verify-public-deployment.sh

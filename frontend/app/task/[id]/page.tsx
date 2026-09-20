@@ -1,0 +1,37 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+type Child = { id: string; title: string; description?: string | null; status: string };
+type Task = { id: string; title: string; description: string | null; deadline: string | null; priority: string; children: Child[] };
+type Proposal = { id: string; status: string; requested_count: number; items: { id: string; title: string; description: string | null }[] };
+
+function playRewardTone() {
+  if (typeof window === "undefined") return;
+  const AudioContextClass = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextClass) return;
+  const context = new AudioContextClass();
+  const now = context.currentTime;
+  [523.25, 659.25, 783.99].forEach((frequency, index) => {
+    const oscillator = context.createOscillator(); const gain = context.createGain();
+    oscillator.type = "sine"; oscillator.frequency.value = frequency;
+    gain.gain.setValueAtTime(0.0001, now + index * 0.07);
+    gain.gain.exponentialRampToValueAtTime(0.12, now + index * 0.07 + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + index * 0.07 + 0.18);
+    oscillator.connect(gain).connect(context.destination); oscillator.start(now + index * 0.07); oscillator.stop(now + index * 0.07 + 0.2);
+  });
+  window.setTimeout(() => void context.close(), 500);
+}
+
+export default function TaskDetail({ params }: { params: { id: string } }) {
+  const [task, setTask] = useState<Task | null>(null), [proposal, setProposal] = useState<Proposal | null>(null), [selectedItemIds, setSelectedItemIds] = useState<string[]>([]), [title, setTitle] = useState(""), [description, setDescription] = useState(""), [childCount, setChildCount] = useState("3"), [busy, setBusy] = useState(false), [message, setMessage] = useState(""), [error, setError] = useState("");
+  async function load() { const [taskResponse, proposalResponse] = await Promise.all([fetch(`${API}/api/tasks/${params.id}`), fetch(`${API}/api/tasks/${params.id}/decompositions`)]); if (!taskResponse.ok) { setError("Taak kon niet worden geladen."); return; } const next = await taskResponse.json(); setTask(next); setTitle(next.title); setDescription(next.description || ""); if (proposalResponse.ok) { const proposals: Proposal[] = await proposalResponse.json(); const latest = proposals[0] || null; setProposal(latest); setSelectedItemIds(latest?.status === "pending" ? latest.items.map(item => item.id) : []); } }
+  useEffect(() => { void load(); }, [params.id]);
+  async function save() { setBusy(true); setError(""); const response = await fetch(`${API}/api/tasks/${params.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, description: description || null }) }); setMessage(response.ok ? "Taak opgeslagen." : "Taak kon niet worden opgeslagen."); setBusy(false); if (response.ok) await load(); }
+  async function askAssistant() { setBusy(true); setError(""); const response = await fetch(`${API}/api/tasks/${params.id}/decompositions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ child_count: Number(childCount) }) }); const data = await response.json().catch(() => null); if (!response.ok) setError(data?.detail || "De taakassistent is niet beschikbaar."); else { setProposal(data); setSelectedItemIds(data.items.map((item: { id: string }) => item.id)); setMessage("Voorstel ontvangen. Kies de stappen die je wilt toevoegen."); } setBusy(false); }
+  async function approve() { if (!proposal || selectedItemIds.length === 0) return; setBusy(true); const response = await fetch(`${API}/api/decompositions/${proposal.id}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ item_ids: selectedItemIds }) }); setMessage(response.ok ? "Subtaken toegevoegd aan de Inbox." : "Subtaken konden niet worden toegevoegd."); setBusy(false); if (response.ok) { playRewardTone(); await load(); } }
+  async function toggleChild(child: Child) { const done = child.status === "done"; const response = await fetch(`${API}/api/tasks/${child.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: done ? "inbox" : "done" }) }); if (response.ok) { playRewardTone(); setMessage(done ? "Subtaak weer opengezet." : "Goed gedaan — subtaak afgerond."); await load(); } }
+  if (!task) return <main className="task-detail-shell"><section className="hero"><p className="meta">Taak laden…</p></section></main>;
+  return <main className="task-detail-shell"><header><span className="logo">ADD</span><span>Taak voorbereiden</span><a className="lab-link" href="/views?unplanned=true">← Later</a></header><section className="hero task-detail-hero"><p className="eyebrow">DETAILS</p><h1>Maak deze taak helder.</h1><p className="meta">Werk titel en beschrijving bij, of vraag hulp om de taak kleiner te maken.</p><div className="task-detail-form"><label>Titel<input value={title} onChange={event => setTitle(event.target.value)} /></label><label>Beschrijving<textarea value={description} onChange={event => setDescription(event.target.value)} placeholder="Wat is een goed resultaat?" rows={5} /></label><button disabled={busy} onClick={() => void save()}>Opslaan</button></div></section><section className="task-assistant-panel"><div className="pending-heading"><div><p className="eyebrow">LLM-HULP</p><h2>Opsplitsen in subtaken</h2></div><span className="meta">De prompt staat in Instellingen.</span></div><p className="meta">Laat een voorstel maken. Er wordt niets toegevoegd voordat je het goedkeurt.</p><div className="task-assistant-actions"><label>Aantal subtaken<select value={childCount} onChange={event => setChildCount(event.target.value)}><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></label><button className="secondary" disabled={busy} onClick={() => void askAssistant()}>Vraag de taakassistent</button></div>{proposal && <div className="decomposition-proposal"><p className="eyebrow">VOORSTEL · {proposal.status}</p><fieldset className="subtask-checklist"><legend>Kies de stappen die je wilt toevoegen</legend>{proposal.items.map(item => <label key={item.id} className="subtask-check"><input type="checkbox" checked={selectedItemIds.includes(item.id)} disabled={proposal.status !== "pending"} onChange={() => setSelectedItemIds(current => current.includes(item.id) ? current.filter(id => id !== item.id) : [...current, item.id])} /><span><strong>{item.title}</strong>{item.description && <small>{item.description}</small>}</span></label>)}</fieldset>{proposal.status === "pending" && <button disabled={busy || selectedItemIds.length === 0} onClick={() => void approve()}>Subtaken toevoegen</button>}</div>}</section>{task.children.length > 0 && <section className="task-children"><h2>Bestaande subtaken</h2><div className="subtask-checklist existing-subtasks">{task.children.map(child => <label key={child.id} className="subtask-check"><input type="checkbox" checked={child.status === "done"} onChange={() => void toggleChild(child)} /><span><strong className={child.status === "done" ? "subtask-done" : undefined}>{child.title}</strong><small>{child.status === "done" ? "Afgerond" : "Nog te doen"}</small></span></label>)}</div></section>}<p className="message">{error || message}</p></main>;
+}

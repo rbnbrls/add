@@ -1,0 +1,15 @@
+# ADD database migrations
+
+Run from the `backend/` directory:
+
+```bash
+alembic upgrade head
+```
+
+For an existing database created before Alembic was introduced, back it up and
+verify its tables before stamping the baseline:
+
+```bash
+alembic stamp 0001_initial
+alembic upgrade head
+```
