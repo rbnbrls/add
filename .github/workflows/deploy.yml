@@ -73,8 +73,10 @@ jobs:
           COOLIFY_WEBHOOK: ${{ secrets.COOLIFY_TEST_WEBHOOK }}
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_TEST_TOKEN }}
         run: |
-          test -n "$COOLIFY_WEBHOOK"
-          test -n "$COOLIFY_TOKEN"
+          if [ -z "$COOLIFY_WEBHOOK" ] || [ -z "$COOLIFY_TOKEN" ]; then
+            echo "::error title=Coolify test webhook missing::Set the repository secrets COOLIFY_TEST_WEBHOOK and COOLIFY_TEST_TOKEN (docs/deployment-coolify.md)."
+            exit 1
+          fi
           curl --fail-with-body --request POST "$COOLIFY_WEBHOOK" \
             --header "Authorization: Bearer $COOLIFY_TOKEN"
 
@@ -98,17 +100,35 @@ jobs:
         shell: bash
         run: awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/ { print }' deployment/targets.env >> "$GITHUB_ENV"
 
-      - name: Trigger Coolify production deployment
+      # rbnbrls/add has no production Coolify resource yet, so the production
+      # half of the promotion gate is wired but inert: it only deploys and
+      # verifies once both production secrets exist. A push to main then stays
+      # green with an explicit notice instead of a red job that pretends the
+      # promotion ran. Set the two secrets and the gate below enforces for real.
+      - name: Check production credentials
+        id: credentials
         env:
           COOLIFY_WEBHOOK: ${{ secrets.COOLIFY_PRODUCTION_WEBHOOK }}
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_PRODUCTION_TOKEN }}
         run: |
-          test -n "$COOLIFY_WEBHOOK"
-          test -n "$COOLIFY_TOKEN"
+          if [ -n "$COOLIFY_WEBHOOK" ] && [ -n "$COOLIFY_TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Production promotion skipped::No production Coolify resource exists for rbnbrls/add yet; add COOLIFY_PRODUCTION_WEBHOOK and COOLIFY_PRODUCTION_TOKEN (docs/deployment-coolify.md) to enable it."
+          fi
+
+      - name: Trigger Coolify production deployment
+        if: steps.credentials.outputs.available == 'true'
+        env:
+          COOLIFY_WEBHOOK: ${{ secrets.COOLIFY_PRODUCTION_WEBHOOK }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_PRODUCTION_TOKEN }}
+        run: |
           curl --fail-with-body --request POST "$COOLIFY_WEBHOOK" \
             --header "Authorization: Bearer $COOLIFY_TOKEN"
 
       - name: Verify production deployment
+        if: steps.credentials.outputs.available == 'true'
         env:
           DEPLOYMENT_ATTEMPTS: "36"
           DEPLOYMENT_WAIT_SECONDS: "10"
