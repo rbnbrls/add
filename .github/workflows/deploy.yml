@@ -54,6 +54,9 @@ jobs:
       - name: Verify Docker deployment path
         run: ./scripts/verify-fresh-upgrade.sh
 
+      - name: Validate deployment workflow authentication
+        run: ./scripts/test-deploy-workflow.sh
+
   deploy-test:
     name: Deploy and verify test
     needs: build-and-test
