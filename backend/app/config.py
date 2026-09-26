@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_url: str = "sqlite:///./add.db"
-    api_cors_origins: str = "http://localhost:3000"
+    api_cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     add_api_token: str = "change-me"
     local_login_password: str = ""
     session_secret: str = "change-this-session-secret"
@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     llm_credential_provider: str = "llm"
     github_token: str = ""
     github_repo: str = "rbnbrls/add"
+    mail_poll_interval_seconds: int = 900
+    mail_sync_batch_size: int = 25
+    mail_auto_cleanup_confidence: float = 0.99
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
