@@ -11,3 +11,9 @@
 #   mypy backend/app
 ruff==0.15.22
 mypy==2.3.1
+
+# Read by `backend/tests/test_coverage_report.py`, which guards the CI workflow
+# that publishes the coverage report. It already arrives through
+# `uvicorn[standard]`; pinning it here keeps that guard running if the extra ever
+# changes.
+pyyaml==6.0.3

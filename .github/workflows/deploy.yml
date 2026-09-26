@@ -3,6 +3,13 @@ name: Build, test, promote
 on:
   push:
     branches: [main]
+  # A pull-request run is what makes the committed coverage report verifiable
+  # *before* the merge: the deploy jobs below are main-only (`github.ref`), so a
+  # pull request only builds and tests. Without this trigger a pull request
+  # carries no checks at all, and the report could only be proven stale after it
+  # had already landed on main.
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -39,19 +46,51 @@ jobs:
         run: mypy backend/app
 
       # The coverage threshold lives here, next to the command that enforces it.
-      # Measured line coverage on 2026-09-26 was 82% (see README.md); the
-      # threshold sits below that so a dependency bump cannot turn a green suite
-      # red without a real coverage drop.
+      # Measured line coverage on 2026-09-26 was 80.01% (2345/2931, see the
+      # committed `coverage.xml`); the threshold sits below that so a dependency
+      # bump cannot turn a green suite red without a real coverage drop.
       - name: Run backend tests with coverage
         working-directory: backend
         run: pytest --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=75
 
-      - name: Upload backend coverage report
+      # The number a reader can trust is the *committed* report at the
+      # repository root: the quality lane reads it from the default branch,
+      # while an uploaded artifact expires and a log line is not durable
+      # evidence. This step republishes the run's measurement there, and the
+      # next step refuses to pass while the committed copy no longer describes
+      # this tree.
+      - name: Publish the coverage report
+        if: always()
+        run: |
+          # `tee` is the last command of the pipeline, so its exit status would
+          # hide a failed publish: propagate the script's own status.
+          python3 scripts/coverage_report.py --summary | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "${PIPESTATUS[0]}"
+
+      - name: The committed report must match this run
+        # `coverage.xml` reaches `main` through the merge, never through a push
+        # from this workflow: committing it here would need a write grant on the
+        # workflow token. So CI measures, normalises and compares, and a change
+        # that moves coverage has to republish the report in the same pull
+        # request.
+        run: |
+          if git diff --exit-code -- coverage.xml; then
+            echo "coverage.xml matches this run"
+            exit 0
+          fi
+          echo "::error::coverage.xml is out of date; republish it with:"
+          echo "::error::  cd backend && pytest --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=75"
+          echo "::error::  python3 scripts/coverage_report.py --summary"
+          git --no-pager diff --stat -- coverage.xml
+          exit 1
+
+      - name: Upload the coverage report as an artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: backend-coverage
-          path: backend/coverage.xml
+          name: coverage-report
+          path: coverage.xml
+          if-no-files-found: error
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
