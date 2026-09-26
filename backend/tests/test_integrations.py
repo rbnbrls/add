@@ -86,6 +86,44 @@ def test_provider_intake_is_idempotent_for_external_message_id(client):
     assert len(client.get("/api/mcp/task-suggestions?status=pending").json()) == 1
 
 
+def test_mail_account_sync_is_rules_first_and_creates_review_proposal(client, monkeypatch):
+    account = client.post("/api/mail/accounts", json={"name": "Test", "provider": "gmail", "address": "me@example.com", "credential": {"access_token": "test"}}).json()
+
+    class Adapter:
+        def fetch(self, cursor, limit):
+            from app.mail import MailItem
+            return [MailItem("message-1", "Newsletter", "news@example.com", "Lees dit", headers={"list-unsubscribe": "<https://example.com/unsub>"})], "next"
+        def archive(self, item): raise AssertionError("newsletter should use unsubscribe")
+        def move_to_trash(self, item): pass
+        def unsubscribe(self, item): pass
+
+    monkeypatch.setattr("app.main._mail_adapter", lambda account, db: Adapter())
+    synced = client.post("/api/mail/sync")
+    assert synced.status_code == 200
+    assert synced.json()["automatic_actions"] == 1
+    assert client.get("/api/mail/summary").json()["messages"] == 1
+    assert client.get("/api/mcp/task-suggestions?status=pending").json() == []
+
+
+def test_mail_unknown_creates_pending_suggestion_without_task_mutation(client, monkeypatch):
+    client.post("/api/mail/accounts", json={"name": "Test", "provider": "imap", "address": "me@example.com", "credential": {}})
+
+    class Adapter:
+        def fetch(self, cursor, limit):
+            from app.mail import MailItem
+            return [MailItem("message-2", "Question", "person@example.com", "Can you help?", headers={})], None
+        def archive(self, item): pass
+        def move_to_trash(self, item): pass
+        def unsubscribe(self, item): pass
+
+    monkeypatch.setattr("app.main._mail_adapter", lambda account, db: Adapter())
+    response = client.post("/api/mail/sync")
+    assert response.json()["created"] == 1
+    proposals = client.get("/api/mcp/task-suggestions?status=pending").json()
+    assert len(proposals) == 1 and proposals[0]["source_type"] == "mail"
+    assert client.get("/api/tasks").json() == []
+
+
 def test_reviewed_suggestion_can_be_planned_and_undone(client):
     created = client.post("/api/mcp/task-suggestions", json={"title": "Planbare taak", "suggested_next_action": "Open dossier", "confidence": .8}).json()
     start = (datetime.now(timezone.utc) + timedelta(days=1)).replace(second=0, microsecond=0)

@@ -47,8 +47,12 @@ def test_fresh_database_is_created_by_migration(tmp_path):
             "reminder_preferences",
         "backup_snapshots",
         "saved_views",
-        "app_preferences",
-        "alembic_version",
+            "app_preferences",
+            "mail_accounts",
+            "mail_messages",
+            "mail_action_audit",
+            "mail_sync_leases",
+            "alembic_version",
     }
     columns = {column["name"] for column in inspect(engine).get_columns("tasks")}
     assert {"actual_minutes", "parent_id", "tags", "planned_at", "priority"} <= columns

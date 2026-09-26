@@ -253,6 +253,33 @@ already matches, and records the inverse transition. `POST /api/planning/undo`
 undoes only the latest not-yet-undone planning decision. Planning decisions are
 append-only apart from their `undone_at` marker and are included in backups.
 
+## Mail intake
+
+- `GET /api/mail/accounts` returns configured mailbox status without credentials.
+- `POST /api/mail/accounts` accepts `{name, provider, address, credential}` and
+  encrypts the credential server-side. `provider` is `gmail`, `outlook` or `imap`.
+- `POST /api/mail/sync` runs a bounded idempotent sync and returns counts; a busy
+  lease returns `status: "busy"` without mutating mail state.
+- `GET /api/mail/summary` returns account/message/pending-proposal counts.
+- `GET /api/mail/triage-queue` returns metadata-only classified messages.
+- `POST /api/mail/messages/{id}/action` accepts `archive`, `trash` or
+  `unsubscribe`; repeating a completed action is idempotent.
+
+Mail never creates a task directly. Messages requiring judgment enter the normal
+pending suggestion queue with `source_type: "mail"` and are reviewed through the
+existing `/review` flow.
+
+`PATCH /api/preferences` accepts `mail_poll_enabled: true|false`. This is the
+user-facing switch for the server-side polling loop; deployment environment
+variables are not required to turn polling on or off.
+
+The same preferences resource stores `secure_cookies`, `api_cors_origins`,
+`mail_poll_interval_seconds`, `mail_sync_batch_size`,
+`mail_auto_cleanup_confidence` and `github_repo`. `api_token` and
+`github_token` may be supplied when updating preferences, but are never returned
+by the API. Database/deployment settings are intentionally not mutable from the
+application.
+
 ## Home Assistant adapter
 
 - `GET /api/ha/now` accepts `is_home`, `energy`, `computer_available` and `max_minutes` as query parameters and requires `X-ADD-Token` when configured.

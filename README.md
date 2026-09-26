@@ -12,6 +12,8 @@ ADD (Activation, Do, Done) is een self-hosted execution app voor mensen die voor
 - Hermes MCP/API-contracten voor suggesties, huidige actie en sessies.
 - Home Assistant interface voor home/away-context en todo-mirror.
 - PostgreSQL-ready productieopstelling; geen Redis/worker in de eerste versie.
+- Mail intake voor Gmail, Outlook/Graph en IMAP met rules-first triage; de
+  optionele 15-minuten poller blijft zonder Redis of aparte worker draaien.
 
 ## Quick start
 

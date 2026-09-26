@@ -1,10 +1,31 @@
 "use client";
-import { useState } from "react";
-const API=process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000";
-type Check={name:string;detail:string;ok:boolean};
 
-export default function Setup(){
- const[step,setStep]=useState(1),[checks,setChecks]=useState<Check[]>([]),[busy,setBusy]=useState(false),[nextPath,setNextPath]=useState("/"),[nextLabel,setNextLabel]=useState("Ga naar NU");
- async function inspect(){setBusy(true);const [health,auth,ha,mcp]=await Promise.all([fetch(`${API}/health`),fetch(`${API}/api/auth/status`),fetch(`${API}/api/ha/config`),fetch(`${API}/api/mcp`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize",params:{}})})]);const a=auth.ok?await auth.json():null;const h=ha.ok?await ha.json():null;const m=mcp.ok?await mcp.json():null;setChecks([{name:"Lokale API",detail:health.ok?"beschikbaar":"niet bereikbaar",ok:health.ok},{name:"Lokale beveiliging",detail:a?.enabled?"login actief":"lokale modus",ok:auth.ok},{name:"MCP-bridge",detail:m?.result?"handshake geslaagd":"niet beschikbaar",ok:Boolean(m?.result)},{name:"Home Assistant",detail:h?.webhook_configured||h?.context_configured?"verbonden":"preview-modus",ok:ha.ok}]);if(!a?.enabled){setNextPath("/security/setup");setNextLabel("Lokale login instellen")}else if(!h?.webhook_configured&&!h?.context_configured){setNextPath("/ha/setup");setNextLabel("Home Assistant instellen")}else if(!m?.result){setNextPath("/mcp/setup");setNextLabel("MCP instellen")}else{setNextPath("/");setNextLabel("Ga naar NU")}setBusy(false);setStep(3)}
- return <main className="security-shell"><header><span className="logo">ADD</span><span>Eerste start</span><a className="lab-link" href="/">NU</a></header><section className="hero"><p className="eyebrow">ADD-WIZARD · STAP {step} VAN 3</p>{step===1&&<><h1>Rustig beginnen.</h1><p className="meta">Eén korte controle maakt duidelijk of je lokale uitvoering klaarstaat.</p><button onClick={()=>setStep(2)}>Start setup</button></>}{step===2&&<><h1>Alles controleren.</h1><p className="meta" aria-live="polite">We lezen alleen statusinformatie. Er worden geen taken of instellingen gewijzigd.</p><button disabled={busy} aria-busy={busy} onClick={inspect}>{busy?"Bezig…":"Controle uitvoeren"}</button></>}{step===3&&<><h1>{checks.every(c=>c.ok)?"Je kunt beginnen.":"Bijna klaar."}</h1><div className="today-list" aria-live="polite" aria-label="Resultaat van de setup-controle">{checks.map(c=><div key={c.name}><strong>{c.ok?"✓":"!"} {c.name}</strong><span>{c.detail}</span></div>)}</div><a className="primary-link" href={nextPath}>{nextLabel}</a></>}</section></main>
+import { useState } from "react";
+
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+export default function Setup() {
+  const [step, setStep] = useState(1);
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function secureInstallation(event: React.FormEvent) {
+    event.preventDefault();
+    setMessage("");
+    if (password.length < 10) { setMessage("Gebruik minimaal 10 tekens."); return; }
+    if (password !== confirm) { setMessage("De wachtwoorden zijn niet gelijk."); return; }
+    setBusy(true);
+    try {
+      const setup = await fetch(`${API}/api/auth/setup`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) });
+      if (!setup.ok) { const detail = await setup.json().catch(() => null); setMessage(detail?.detail || "De lokale beveiliging kon niet worden ingesteld."); return; }
+      const login = await fetch(`${API}/api/auth/login`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) });
+      if (!login.ok) { setMessage("De beveiliging is ingesteld. Open ADD opnieuw om in te loggen."); return; }
+      setPassword(""); setConfirm(""); setStep(3);
+    } catch { setMessage("De lokale API is niet bereikbaar. Probeer het opnieuw."); }
+    finally { setBusy(false); }
+  }
+
+  return <main className="security-shell"><header><span className="logo">ADD</span><span>Eerste start</span></header><section className="hero"><p className="eyebrow">ADD-WIZARD · STAP {step} VAN 3</p>{step===1&&<><h1>Rustig beginnen.</h1><p className="meta">Eén korte controle maakt duidelijk of je lokale uitvoering klaarstaat.</p><button onClick={()=>setStep(2)}>Start setup</button></>}{step===2&&<><h1>Beveilig eerst je installatie.</h1><p className="meta">Kies een lokaal wachtwoord. Pas daarna kun je mail en andere integraties koppelen.</p><form className="intake-form" onSubmit={secureInstallation}><label>Wachtwoord<input autoFocus required minLength={10} type="password" value={password} onChange={event=>setPassword(event.target.value)} autoComplete="new-password"/></label><label>Herhaal wachtwoord<input required minLength={10} type="password" value={confirm} onChange={event=>setConfirm(event.target.value)} autoComplete="new-password"/></label><button disabled={busy||!password||!confirm}>{busy?"Beveiliging instellen…":"Wachtwoord instellen"}</button></form><p className="message">{message}</p></>}{step===3&&<><h1>Je installatie is beveiligd.</h1><p className="meta">Je lokale account is klaar. Nu kun je veilig mailboxen en andere integraties verbinden.</p><div className="actions"><a className="primary-link" href="/integrations">Naar integraties</a><a className="secondary-link" href="/">Ga naar NU</a></div></>}</section></main>;
 }

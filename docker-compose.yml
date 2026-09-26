@@ -31,11 +31,14 @@ services:
       LLM_CREDENTIAL_PROVIDER: ${LLM_CREDENTIAL_PROVIDER:-llm}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GITHUB_REPO: ${GITHUB_REPO:-rbnbrls/add}
+      MAIL_POLL_INTERVAL_SECONDS: ${MAIL_POLL_INTERVAL_SECONDS:-900}
+      MAIL_SYNC_BATCH_SIZE: ${MAIL_SYNC_BATCH_SIZE:-25}
+      MAIL_AUTO_CLEANUP_CONFIDENCE: ${MAIL_AUTO_CLEANUP_CONFIDENCE:-0.99}
     depends_on:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
       interval: 10s
       timeout: 5s
       retries: 5

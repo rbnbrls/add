@@ -1,9 +1,11 @@
+import asyncio
 import json
 import hashlib
 import hmac
 import logging
 import secrets
 import time
+from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 from typing import Literal, Sequence, cast
 from datetime import date, datetime, timedelta, timezone
@@ -13,7 +15,6 @@ import httpx
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from pydantic import ValidationError
 from fastapi.encoders import jsonable_encoder
-from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from sqlalchemy import delete, func, select, text
@@ -21,7 +22,7 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .capture import NaturalLanguageCaptureResult, estimate_suggestion, parse_brain_dump, parse_capture, parse_schedule, plain_text_capture
 from .decomposition import decompose_task, item_from_child, remove_existing_children
-from .db import get_db
+from .db import SessionLocal, get_db
 from .domain import check_day_rollover, choose_action, daily_completion_counts, day_window, delete_task, finish_accountability, finish_session, pause_session, resolve_blocked_action, resume_session, start_accountability, start_action, validate_parent
 from .llm import LLMError, LLMGateway, fetch_openrouter_free_models
 from .models import AccountabilitySession, Action, ActionStatus, AppPreference, BackupSnapshot, CompletionLog, DecompositionStatus, ExecutionSession, IntegrationCredential, LocalAccount, OutboxEvent, PlanBlock, PlanningDecision, ReminderPreference, Routine, RoutineOccurrence, SavedView, SessionOutcome, SuggestionStatus, Task, TaskDecompositionItem, TaskDecompositionProposal, TaskPriority, TaskRolloverEvent, TaskStatus, TaskSuggestionRecord
@@ -30,11 +31,49 @@ from .security import credential_box, read_encrypted_credential
 from .text_assistance import analyze_tone, rewrite_text
 from .github_issue import create_github_issue
 
-app = FastAPI(title="ADD API", version="0.1.0")
-app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.api_cors_origins.split(",")], allow_methods=["*"], allow_headers=["*"], allow_credentials=True)
+@asynccontextmanager
+async def lifespan(_app):
+    task = asyncio.create_task(mail_poll_loop())
+    try:
+        yield
+    finally:
+        if task:
+            task.cancel()
+            try: await task
+            except asyncio.CancelledError: pass
+
+
+app = FastAPI(title="ADD API", version="0.1.0", lifespan=lifespan)
 
 request_log = logging.getLogger("add.api")
 _rate_buckets: dict[tuple[str, str], list[float]] = {}
+
+
+class DynamicCORSMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        origin = request.headers.get("origin")
+        allowed = settings.api_cors_origins.split(",")
+        try:
+            with SessionLocal() as db:
+                preference = db.scalar(select(AppPreference).order_by(AppPreference.id.asc()))
+                if preference:
+                    allowed = preference.api_cors_origins.split(",")
+        except Exception:
+            pass
+        if request.method == "OPTIONS" and origin and origin.strip() in {item.strip() for item in allowed}:
+            response = Response(status_code=204)
+        else:
+            response = await call_next(request)
+        if origin and origin.strip() in {item.strip() for item in allowed}:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = request.headers.get("access-control-request-headers", "*")
+            response.headers["Vary"] = "Origin"
+        return response
+
+
+app.add_middleware(DynamicCORSMiddleware)
 
 
 class OperationalMiddleware(BaseHTTPMiddleware):
@@ -79,13 +118,15 @@ def password_matches(password: str, stored: str) -> bool:
 
 def auth(x_add_token: str | None = Header(default=None), add_session: str | None = Cookie(default=None), db: Session = Depends(get_db)):
     account = db.scalar(select(LocalAccount))
+    preference = db.scalar(select(AppPreference).order_by(AppPreference.id.asc()))
+    configured_api_token = read_encrypted_credential(db, "runtime:add-api-token") or settings.add_api_token
     if account or settings.local_login_password:
         if add_session != settings.session_secret: raise HTTPException(401, "login required")
-    elif settings.add_api_token != "change-me" and x_add_token != settings.add_api_token: raise HTTPException(401, "invalid token")
+    elif configured_api_token != "change-me" and x_add_token != configured_api_token: raise HTTPException(401, "invalid token")
 
 
 @app.post("/api/feedback", dependencies=[Depends(auth)])
-async def feedback(payload: dict):
+async def feedback(payload: dict, db: Session = Depends(get_db)):
     """Turn user feedback into a labelled GitHub issue."""
     kind = str(payload.get("type") or "feature").strip().lower()
     title = str(payload.get("title") or "").strip()
@@ -98,13 +139,15 @@ async def feedback(payload: dict):
         raise HTTPException(422, "description is required")
     if len(title) > 160 or len(description) > 4000:
         raise HTTPException(422, "feedback is too long")
-    if not settings.github_token:
+    preference = get_app_preference(db)
+    github_token = read_encrypted_credential(db, "runtime:github-token") or settings.github_token
+    if not github_token:
         raise HTTPException(503, "GitHub feedback is not configured")
 
     label = "bug" if kind == "bug" else "enhancement"
     result = await create_github_issue(
-        token=settings.github_token,
-        repository=settings.github_repo,
+        token=github_token,
+        repository=preference.github_repo or settings.github_repo,
         title=f"[{kind.upper()}] {title}",
         body=f"## Feedback uit ADD\n\n**Type:** {kind}\n\n---\n\n{description}",
         labels=[label, "feedback"],
@@ -131,6 +174,176 @@ def get_llm_gateway(db: Session = Depends(get_db)) -> LLMGateway:
     return LLMGateway(db)
 
 
+def _mail_adapter(account: MailAccount, db: Session) -> MailAdapter:
+    credential = read_json_credential(db, account.credential_provider) or {}
+    if account.provider == MailProvider.GMAIL: return GmailAdapter(credential)
+    if account.provider == MailProvider.OUTLOOK: return GraphAdapter(credential)
+    return ImapAdapter(credential)
+
+
+def _mail_lease(db: Session, owner: str, seconds: int = 600) -> bool:
+    now = datetime.now(timezone.utc)
+    lease = db.get(MailSyncLease, "global")
+    if lease and lease.expires_at > now and lease.owner != owner:
+        return False
+    if not lease:
+        lease = MailSyncLease(id="global", owner=owner, expires_at=now + timedelta(seconds=seconds)); db.add(lease)
+    else:
+        lease.owner = owner; lease.expires_at = now + timedelta(seconds=seconds)
+    db.commit()
+    return True
+
+
+def _mail_action(adapter: MailAdapter, item: MailItem, action: str):
+    if action == "archive": adapter.archive(item)
+    elif action == "trash": adapter.move_to_trash(item)
+    elif action == "unsubscribe": adapter.unsubscribe(item)
+    else: raise ValueError("unsupported mail action")
+
+
+def sync_mailboxes(db: Session, owner: str = "manual") -> dict:
+    if not _mail_lease(db, owner): return {"status": "busy", "processed": 0, "accounts": 0}
+    processed = 0; created = 0; automatic = 0; errors = []
+    accounts = db.scalars(select(MailAccount).where(MailAccount.status == MailAccountStatus.ACTIVE)).all()
+    for account in accounts:
+        try:
+            adapter = _mail_adapter(account, db)
+            preference = get_app_preference(db)
+            items, cursor = adapter.fetch(account.sync_cursor, preference.mail_sync_batch_size)
+            for item in items:
+                message = db.scalar(select(MailMessage).where(MailMessage.account_id == account.id, MailMessage.provider_message_id == item.provider_message_id))
+                if message: continue
+                message = MailMessage(account_id=account.id, provider_message_id=item.provider_message_id, thread_id=item.thread_id, sender=item.sender, subject=item.subject[:500], snippet=(item.snippet or "")[:2000], received_at=item.received_at, headers={k: v[:1000] for k, v in item.headers.items()}, provider_spam=item.provider_spam)
+                result = classify(item, get_llm_gateway(db))
+                message.category = result.category; message.confidence = result.confidence; message.triage_status = "classified"
+                db.add(message); db.flush(); created += 1; processed += 1
+                action = None
+                if result.category == "spam": action = "archive"
+                elif result.category == "newsletter" and result.confidence >= preference.mail_auto_cleanup_confidence and item.headers.get("list-unsubscribe"):
+                    action = "unsubscribe"
+                if action:
+                    audit = MailActionAudit(message_id=message.id, action=action, status="pending"); db.add(audit); db.flush()
+                    try:
+                        _mail_action(adapter, item, action)
+                        if action == "unsubscribe":
+                            _mail_action(adapter, item, "trash")
+                        audit.status = "done"; audit.completed_at = datetime.now(timezone.utc); message.triage_status = "auto_cleaned"; automatic += 1
+                    except Exception as exc:
+                        audit.status = "failed"; audit.detail = str(exc)[:500]; message.triage_status = "action_failed"; message.last_error = "mail action failed"
+                elif result.category in {"personal", "action", "meeting", "unknown"}:
+                    source_ref = f"{account.id}:{item.provider_message_id}"
+                    if not external_suggestion(db, "mail", source_ref):
+                        db.add(TaskSuggestionRecord(title=item.subject[:240], description=(item.snippet or "")[:4000], source_type="mail", source_ref=source_ref, original_input=(item.snippet or "")[:4000], suggested_next_action=f"Lees en beoordeel: {item.subject}"[:300], confidence=result.confidence, batch_id=account.id))
+            account.sync_cursor = cursor; account.last_synced_at = datetime.now(timezone.utc); account.last_error = None
+            db.commit()
+        except Exception as exc:
+            db.rollback(); account.last_error = "mail sync failed"; account.status = MailAccountStatus.ERROR; db.commit(); errors.append(account.id)
+    lease = db.get(MailSyncLease, "global")
+    if lease and lease.owner == owner: db.delete(lease); db.commit()
+    return {"status": "ok" if not errors else "partial", "processed": processed, "created": created, "automatic_actions": automatic, "accounts": len(accounts), "errors": errors}
+
+
+async def mail_poll_loop():
+    while True:
+        try:
+            with next(get_db()) as db:
+                preference = db.scalar(select(AppPreference).order_by(AppPreference.id.asc()))
+                interval = preference.mail_poll_interval_seconds if preference else settings.mail_poll_interval_seconds
+        except Exception:
+            interval = settings.mail_poll_interval_seconds
+        await asyncio.sleep(interval)
+        try:
+            with next(get_db()) as db:
+                preference = db.scalar(select(AppPreference).order_by(AppPreference.id.asc()))
+                if preference and preference.mail_poll_enabled:
+                    await asyncio.to_thread(sync_mailboxes, db, "poller")
+        except Exception:
+            request_log.exception("mail_poll_failed")
+
+
+@app.get("/api/mail/accounts", response_model=list[MailAccountOut], dependencies=[Depends(auth)])
+def mail_accounts(db: Session = Depends(get_db)):
+    return db.scalars(select(MailAccount).order_by(MailAccount.created_at.asc())).all()
+
+
+@app.post("/api/mail/accounts", response_model=MailAccountOut, dependencies=[Depends(auth)])
+def create_mail_account(payload: MailAccountCreate, db: Session = Depends(get_db)):
+    provider = MailProvider(payload.provider)
+    credential_provider = f"mail:{uuid4()}"
+    item = MailAccount(name=payload.name, provider=provider, address=payload.address, credential_provider=credential_provider)
+    db.add(item)
+    db.add(IntegrationCredential(provider=credential_provider, encrypted_value=credential_box().encrypt(json.dumps(payload.credential).encode()).decode()))
+    db.commit(); db.refresh(item)
+    return item
+
+
+@app.post("/api/mail/accounts/{account_id}/test", dependencies=[Depends(auth)])
+def test_mail_account(account_id: str, db: Session = Depends(get_db)):
+    account = db.get(MailAccount, account_id)
+    if not account: raise HTTPException(404, "mail account not found")
+    try:
+        adapter = _mail_adapter(account, db); adapter.fetch(account.sync_cursor, 1)
+        account.last_error = None; account.status = MailAccountStatus.ACTIVE; db.commit()
+        return {"ok": True, "message": "mailbox connection works"}
+    except Exception:
+        account.last_error = "mailbox connection failed"; db.commit()
+        return {"ok": False, "message": "mailbox connection failed"}
+
+
+@app.post("/api/mail/accounts/{account_id}/pause", response_model=MailAccountOut, dependencies=[Depends(auth)])
+def pause_mail_account(account_id: str, db: Session = Depends(get_db)):
+    account = db.get(MailAccount, account_id)
+    if not account: raise HTTPException(404, "mail account not found")
+    account.status = MailAccountStatus.PAUSED if account.status == MailAccountStatus.ACTIVE else MailAccountStatus.ACTIVE
+    db.commit(); db.refresh(account); return account
+
+
+@app.delete("/api/mail/accounts/{account_id}", dependencies=[Depends(auth)])
+def delete_mail_account(account_id: str, db: Session = Depends(get_db)):
+    account = db.get(MailAccount, account_id)
+    if not account: raise HTTPException(404, "mail account not found")
+    message_ids = list(db.scalars(select(MailMessage.id).where(MailMessage.account_id == account.id)))
+    if message_ids:
+        db.execute(delete(MailActionAudit).where(MailActionAudit.message_id.in_(message_ids)))
+        db.execute(delete(MailMessage).where(MailMessage.account_id == account.id))
+    db.delete(account); credential = db.scalar(select(IntegrationCredential).where(IntegrationCredential.provider == account.credential_provider))
+    if credential: db.delete(credential)
+    db.commit(); return {"deleted": True, "id": account_id}
+
+
+@app.post("/api/mail/sync", dependencies=[Depends(auth)])
+def sync_mail(payload: dict | None = None, db: Session = Depends(get_db)):
+    return sync_mailboxes(db, f"manual:{uuid4()}")
+
+
+@app.get("/api/mail/summary", dependencies=[Depends(auth)])
+def mail_summary(db: Session = Depends(get_db)):
+    return {"accounts": db.scalar(select(func.count(MailAccount.id))) or 0, "messages": db.scalar(select(func.count(MailMessage.id))) or 0, "pending_suggestions": db.scalar(select(func.count(TaskSuggestionRecord.id)).where(TaskSuggestionRecord.status == SuggestionStatus.PENDING, TaskSuggestionRecord.source_type == "mail")) or 0, "last_synced_at": max((item.last_synced_at for item in db.scalars(select(MailAccount)).all() if item.last_synced_at), default=None)}
+
+
+@app.get("/api/mail/triage-queue", response_model=list[MailMessageOut], dependencies=[Depends(auth)])
+def mail_triage_queue(db: Session = Depends(get_db)):
+    return db.scalars(select(MailMessage).where(MailMessage.triage_status.in_(("classified", "action_failed"))).order_by(MailMessage.received_at.asc().nulls_last()).limit(25)).all()
+
+
+@app.post("/api/mail/messages/{message_id}/action", dependencies=[Depends(auth)])
+def mail_message_action(message_id: str, payload: MailActionRequest, db: Session = Depends(get_db)):
+    message = db.get(MailMessage, message_id)
+    if not message: raise HTTPException(404, "mail message not found")
+    account = db.get(MailAccount, message.account_id)
+    if not account: raise HTTPException(404, "mail account not found")
+    audit = db.scalar(select(MailActionAudit).where(MailActionAudit.message_id == message.id, MailActionAudit.action == payload.action))
+    if audit and audit.status == "done": return {"status": "already_done", "message_id": message_id, "action": payload.action}
+    if not audit: audit = MailActionAudit(message_id=message.id, action=payload.action); db.add(audit); db.flush()
+    try:
+        item = MailItem(message.provider_message_id, message.subject, message.sender, message.snippet, message.received_at, message.thread_id, message.headers, message.provider_spam)
+        _mail_action(_mail_adapter(account, db), item, payload.action)
+        audit.status = "done"; audit.completed_at = datetime.now(timezone.utc); message.triage_status = "actioned"; db.commit()
+        return {"status": "done", "message_id": message_id, "action": payload.action}
+    except Exception as exc:
+        audit.status = "failed"; audit.detail = str(exc)[:500]; db.commit(); raise HTTPException(502, "mail action failed") from exc
+
+
 @app.put("/api/ha/setup", dependencies=[Depends(auth)])
 def save_ha_setup(payload: dict, db: Session = Depends(get_db)):
     mode = payload.get("mode", "preview")
@@ -150,7 +363,7 @@ def save_ha_setup(payload: dict, db: Session = Depends(get_db)):
 @app.get("/api/auth/status")
 def auth_status(add_session: str | None = Cookie(default=None), db: Session = Depends(get_db)):
     enabled = bool(settings.local_login_password or db.scalar(select(LocalAccount)))
-    return {"enabled": enabled, "login_configured": enabled, "encryption_configured": bool(settings.credential_encryption_key), "authenticated": not enabled or add_session == settings.session_secret}
+    return {"enabled": enabled, "login_configured": enabled, "first_start_required": not enabled, "encryption_configured": bool(settings.credential_encryption_key), "authenticated": not enabled or add_session == settings.session_secret}
 
 
 @app.post("/api/auth/setup")
@@ -168,7 +381,8 @@ def login(payload: dict, response: Response, db: Session = Depends(get_db)):
     valid = password_matches(password, account.password_hash) if account else password == settings.local_login_password
     if not account and not settings.local_login_password: return {"authenticated": True, "enabled": False}
     if not valid: raise HTTPException(401, "onjuist wachtwoord")
-    response.set_cookie("add_session", settings.session_secret, httponly=True, samesite="lax", secure=settings.secure_cookies, max_age=2592000)
+    preference = db.scalar(select(AppPreference).order_by(AppPreference.id.asc()))
+    response.set_cookie("add_session", settings.session_secret, httponly=True, samesite="lax", secure=preference.secure_cookies if preference else settings.secure_cookies, max_age=2592000)
     return {"authenticated": True, "enabled": True}
 
 
@@ -345,7 +559,7 @@ def backup_restore(payload: dict, confirmed: bool = Query(default=False), db: Se
     for item in payload.get("reminder_preferences", []):
         db.add(ReminderPreference(id=item["id"], provider=item.get("provider", "none"), enabled=item.get("enabled", False), quiet_start=item.get("quiet_start", "22:00"), quiet_end=item.get("quiet_end", "07:00"), timezone=item.get("timezone", "UTC")))
     for item in payload.get("app_preferences", []):
-        db.add(AppPreference(id=item["id"], workflow_badge_mode=item.get("workflow_badge_mode", "dot"), task_assistant_prompt=item.get("task_assistant_prompt", "Help me decompose this task into concrete, small next steps and improve its description."), llm_provider="openrouter", llm_base_url="https://openrouter.ai/api/v1", llm_model=item.get("llm_model", "openrouter/free"), llm_credential_provider=item.get("llm_credential_provider", "llm"), created_at=backup_datetime(item.get("created_at")), updated_at=backup_datetime(item.get("updated_at") or item.get("created_at"))))
+        db.add(AppPreference(id=item["id"], workflow_badge_mode=item.get("workflow_badge_mode", "dot"), mail_poll_enabled=item.get("mail_poll_enabled", False), api_cors_origins=item.get("api_cors_origins", settings.api_cors_origins), secure_cookies=item.get("secure_cookies", settings.secure_cookies), mail_poll_interval_seconds=item.get("mail_poll_interval_seconds", settings.mail_poll_interval_seconds), mail_sync_batch_size=item.get("mail_sync_batch_size", settings.mail_sync_batch_size), mail_auto_cleanup_confidence=item.get("mail_auto_cleanup_confidence", settings.mail_auto_cleanup_confidence), github_repo=item.get("github_repo", settings.github_repo), task_assistant_prompt=item.get("task_assistant_prompt", "Help me decompose this task into concrete, small next steps and improve its description."), llm_provider="openrouter", llm_base_url="https://openrouter.ai/api/v1", llm_model=item.get("llm_model", "openrouter/free"), llm_credential_provider=item.get("llm_credential_provider", "llm"), created_at=backup_datetime(item.get("created_at")), updated_at=backup_datetime(item.get("updated_at") or item.get("created_at"))))
     for item in payload.get("smart_views", []):
         db.add(SavedView(id=item["id"], name=item["name"], filters=item.get("filters", {}), created_at=backup_datetime(item.get("created_at"))))
     db.commit()
@@ -363,7 +577,7 @@ def backup_rollback(confirmed: bool = Query(default=False), db: Session = Depend
 def get_app_preference(db: Session) -> AppPreference:
     preference = db.scalar(select(AppPreference).order_by(AppPreference.id.asc()))
     if not preference:
-        preference = AppPreference(workflow_badge_mode="dot")
+        preference = AppPreference(workflow_badge_mode="dot", mail_poll_enabled=False, api_cors_origins=settings.api_cors_origins, secure_cookies=settings.secure_cookies, mail_poll_interval_seconds=settings.mail_poll_interval_seconds, mail_sync_batch_size=settings.mail_sync_batch_size, mail_auto_cleanup_confidence=settings.mail_auto_cleanup_confidence, github_repo=settings.github_repo)
         db.add(preference)
         db.commit()
         db.refresh(preference)
@@ -395,6 +609,35 @@ def read_preferences(db: Session = Depends(get_db)):
 def update_preferences(payload: AppPreferenceUpdate, db: Session = Depends(get_db)):
     preference = get_app_preference(db)
     preference.workflow_badge_mode = payload.workflow_badge_mode
+    if payload.mail_poll_enabled is not None:
+        preference.mail_poll_enabled = payload.mail_poll_enabled
+    if payload.api_cors_origins is not None:
+        origins = ",".join(item.strip() for item in payload.api_cors_origins.split(",") if item.strip())
+        if not origins: raise HTTPException(422, "at least one CORS origin is required")
+        preference.api_cors_origins = origins
+    if payload.secure_cookies is not None:
+        preference.secure_cookies = payload.secure_cookies
+    if payload.mail_poll_interval_seconds is not None:
+        preference.mail_poll_interval_seconds = payload.mail_poll_interval_seconds
+    if payload.mail_sync_batch_size is not None:
+        preference.mail_sync_batch_size = payload.mail_sync_batch_size
+    if payload.mail_auto_cleanup_confidence is not None:
+        preference.mail_auto_cleanup_confidence = payload.mail_auto_cleanup_confidence
+    if payload.github_repo is not None:
+        if "/" not in payload.github_repo or payload.github_repo.count("/") != 1:
+            raise HTTPException(422, "GitHub repository must be owner/repository")
+        preference.github_repo = payload.github_repo.strip()
+    if payload.api_token is not None:
+        token = payload.api_token.strip()
+        item = db.scalar(select(IntegrationCredential).where(IntegrationCredential.provider == "runtime:add-api-token"))
+        if not item:
+            item = IntegrationCredential(provider="runtime:add-api-token"); db.add(item)
+        item.encrypted_value = credential_box().encrypt(token.encode()).decode(); item.updated_at = datetime.now(timezone.utc)
+    if payload.github_token is not None and payload.github_token.strip():
+        item = db.scalar(select(IntegrationCredential).where(IntegrationCredential.provider == "runtime:github-token"))
+        if not item:
+            item = IntegrationCredential(provider="runtime:github-token"); db.add(item)
+        item.encrypted_value = credential_box().encrypt(payload.github_token.strip().encode()).decode(); item.updated_at = datetime.now(timezone.utc)
     if payload.task_assistant_prompt is not None:
         preference.task_assistant_prompt = payload.task_assistant_prompt.strip()
     if payload.llm_provider is not None:
@@ -1661,6 +1904,12 @@ def mcp_rpc(request: dict, db: Session = Depends(get_db)):
         "execution_start_action": {"type": "object", "required": ["action_id"], "properties": {"action_id": {"type": "string"}}, "additionalProperties": False},
         "execution_complete_action": {"type": "object", "required": ["session_id", "outcome"], "properties": {"session_id": {"type": "string"}, "outcome": {"enum": ["done", "continue", "stuck", "stop_for_today"]}, "stuck_reason": {"type": ["string", "null"]}}, "additionalProperties": False},
         "execution_mark_stuck": {"type": "object", "required": ["session_id"], "properties": {"session_id": {"type": "string"}, "stuck_reason": {"type": ["string", "null"]}}, "additionalProperties": False},
+        "get_mail_summary": {"type": "object", "properties": {}, "additionalProperties": False},
+        "get_mail_triage_queue": {"type": "object", "properties": {}, "additionalProperties": False},
+        "approve_mail_action": {"type": "object", "required": ["message_id", "action"], "properties": {"message_id": {"type": "string"}, "action": {"enum": ["archive", "trash", "unsubscribe"]}}, "additionalProperties": False},
+        "retry_mail_sync": {"type": "object", "properties": {}, "additionalProperties": False},
+        "create_task_from_email": {"type": "object", "required": ["message_id"], "properties": {"message_id": {"type": "string"}}, "additionalProperties": False},
+        "draft_reply_from_email": {"type": "object", "required": ["message_id"], "properties": {"message_id": {"type": "string"}}, "additionalProperties": False},
     }
     if method == "initialize":
         return {"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": "2025-03-26", "capabilities": {"tools": {"listChanged": False}, "resources": {}, "prompts": {"listChanged": False}}, "serverInfo": {"name": "add-execution", "version": app.version}}}
