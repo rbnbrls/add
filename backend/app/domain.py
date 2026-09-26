@@ -19,7 +19,7 @@ def choose_action(db: Session, *, is_home: bool = True, energy: str = "medium", 
         if max_minutes is not None and a.estimated_minutes > max_minutes: return -10_000
         if a.estimated_minutes >= 30 and important_done >= 1: return -10_000
         if a.estimated_minutes < 30 and small_done >= 2: return -10_000
-        value = 0
+        value: float = 0
         value += {"high": 20, "medium": 10, "low": 0}.get(task.priority.value if hasattr(task.priority, "value") else task.priority, 10)
         if task.deadline:
             deadline = task.deadline
@@ -79,6 +79,8 @@ def resume_session(db: Session, session: ExecutionSession):
 def finish_session(db: Session, session: ExecutionSession, outcome: SessionOutcome, stuck_reason: str | None = None):
     if session.outcome != SessionOutcome.RUNNING: raise ValueError("session already finished")
     action = db.get(Action, session.action_id)
+    if not action:
+        raise ValueError("session action no longer exists")
     session.outcome = outcome; session.stuck_reason = stuck_reason; session.ended_at = datetime.now(timezone.utc)
     task = db.get(Task, action.task_id)
     started_at = session.started_at
@@ -125,6 +127,10 @@ def check_day_rollover(db: Session, day: date, timezone_name: str):
         if exists:
             continue
         old = task.planned_at
+        if old is None:
+            # The query above selects only tasks with a planned_at, so a null
+            # here means the row changed underneath the rollover pass.
+            continue
         local_old = old.replace(tzinfo=timezone.utc).astimezone(tz) if old.tzinfo is None else old.astimezone(tz)
         local_new = start.replace(hour=local_old.hour, minute=local_old.minute, second=local_old.second, microsecond=local_old.microsecond)
         task.planned_at = local_new.astimezone(timezone.utc)
@@ -142,7 +148,7 @@ def validate_parent(db: Session, task: Task, parent_id: str | None):
     parent = db.get(Task, parent_id)
     if not parent:
         raise ValueError("parent task not found")
-    current = parent
+    current: Task | None = parent
     visited = set()
     while current:
         if current.id in visited:

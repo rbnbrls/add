@@ -5,6 +5,7 @@ import logging
 import secrets
 import time
 from urllib.parse import urlparse
+from typing import Literal, Sequence, cast
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from uuid import uuid4
@@ -18,13 +19,13 @@ from starlette.responses import JSONResponse
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 from .config import settings
-from .capture import estimate_suggestion, parse_brain_dump, parse_capture, parse_schedule, plain_text_capture
+from .capture import NaturalLanguageCaptureResult, estimate_suggestion, parse_brain_dump, parse_capture, parse_schedule, plain_text_capture
 from .decomposition import decompose_task, item_from_child, remove_existing_children
 from .db import get_db
 from .domain import check_day_rollover, choose_action, daily_completion_counts, day_window, delete_task, finish_accountability, finish_session, pause_session, resolve_blocked_action, resume_session, start_accountability, start_action, validate_parent
 from .llm import LLMError, LLMGateway, fetch_openrouter_free_models
 from .models import AccountabilitySession, Action, ActionStatus, AppPreference, BackupSnapshot, CompletionLog, DecompositionStatus, ExecutionSession, IntegrationCredential, LocalAccount, OutboxEvent, PlanBlock, PlanningDecision, ReminderPreference, Routine, RoutineOccurrence, SavedView, SessionOutcome, SuggestionStatus, Task, TaskDecompositionItem, TaskDecompositionProposal, TaskPriority, TaskRolloverEvent, TaskStatus, TaskSuggestionRecord
-from .schemas import AccountabilityFinishRequest, AccountabilityOut, AccountabilityStartRequest, ActionCreate, ActionOut, AppPreferenceOut, AppPreferenceUpdate, BlockTaskRequest, CompleteActionRequest, CompletionOut, DailyReviewCompleteOut, DailyReviewCompleteRequest, DayCheckRequest, DecompositionApprovalRequest, DecompositionApprovalOut, DecompositionProposalOut, DecompositionRequest, FocusDuration, FreeLLMModelCatalogOut, HAContext, HAEvent, LLMSettingsOut, MessageDraft, NaturalLanguageCaptureRequest, NaturalLanguageCaptureResponse, OfflineCompletion, PlanBlockCreate, PlanBlockOut, PlanSuggestionRequest, PlanningDecisionOut, ReminderSettings, ResolveBlockedActionRequest, ReplanRequest, RoutineCreate, RoutineOut, SendMessageRequest, SessionResult, SmartViewCreate, SmartViewFilters, SmartViewOut, StartActionRequest, StartOut, SuggestionApproval, SuggestionOut, TaskCreate, TaskOut, TaskUpdate, TaskSuggestion, TodayStatus, TextRewriteRequest, TextRewriteResponse, ToneAnalysisRequest, ToneAnalysisResponse, WorkflowSummaryOut
+from .schemas import AccountabilityFinishRequest, AccountabilityOut, AccountabilityStartRequest, ActionCreate, ActionOut, AppPreferenceOut, AppPreferenceUpdate, BlockTaskRequest, BrainDumpProposal, CompletionOut, DailyReviewCompleteOut, DailyReviewCompleteRequest, DayCheckRequest, DecompositionApprovalRequest, DecompositionApprovalOut, DecompositionProposalOut, DecompositionRequest, FreeLLMModelCatalogOut, HAContext, HAEvent, LLMSettingsOut, MessageDraft, NaturalLanguageCaptureRequest, NaturalLanguageCaptureResponse, OfflineCompletion, PlanBlockCreate, PlanBlockOut, PlanSuggestionRequest, PlanningDecisionOut, ReminderSettings, ResolveBlockedActionRequest, ReplanRequest, RoutineCreate, RoutineOut, SendMessageRequest, SessionResult, SmartViewCreate, SmartViewFilters, SmartViewOut, StartOut, SuggestionApproval, SuggestionOut, TaskCreate, TaskOut, TaskUpdate, TaskSuggestion, TodayStatus, TextRewriteRequest, TextRewriteResponse, ToneAnalysisRequest, ToneAnalysisResponse, WorkflowSummaryOut
 from .security import credential_box, read_encrypted_credential
 from .text_assistance import analyze_tone, rewrite_text
 from .github_issue import create_github_issue
@@ -581,10 +582,11 @@ def capture_inbox(payload: NaturalLanguageCaptureRequest, gateway: LLMGateway = 
     except ZoneInfoNotFoundError:
         raise HTTPException(422, "invalid timezone")
     if source_type == "web_link":
-        parsed_url = urlparse(source_ref or "")
+        candidate = (source_ref or "").strip()
+        parsed_url = urlparse(candidate)
         if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
             raise HTTPException(422, "web_link requires a valid http(s) URL")
-        source_ref = source_ref.strip()
+        source_ref = candidate
     elif source_type == "shortcut":
         source_ref = payload.idempotency_key or hashlib.sha256(text.encode("utf-8")).hexdigest()
     if source_type in {"shortcut", "web_link", "voice_transcript"} and source_ref:
@@ -639,7 +641,9 @@ def capture_inbox(payload: NaturalLanguageCaptureRequest, gateway: LLMGateway = 
 def brain_dump_inbox(payload: NaturalLanguageCaptureRequest, gateway: LLMGateway = Depends(get_llm_gateway), db: Session = Depends(get_db)):
     batch_id = str(uuid4())
     try:
-        proposals = parse_brain_dump(gateway, payload.text).proposals
+        # The fallback produces a single plain-text capture when the provider
+        # fails, so the proposal list holds either shape.
+        proposals: Sequence[BrainDumpProposal | NaturalLanguageCaptureResult] = parse_brain_dump(gateway, payload.text).proposals
     except LLMError:
         proposals = [plain_text_capture(payload.text)]
     records = []
@@ -815,7 +819,7 @@ def list_smart_views(db: Session = Depends(get_db)):
 
 @app.post("/api/smart-views", response_model=SmartViewOut, dependencies=[Depends(auth)])
 def create_smart_view(payload: SmartViewCreate, db: Session = Depends(get_db)):
-    if db.scalar(select(func.count(SavedView.id))) >= 3:
+    if (db.scalar(select(func.count(SavedView.id))) or 0) >= 3:
         raise HTTPException(409, "maximaal drie opgeslagen views toegestaan")
     if db.scalar(select(SavedView).where(func.lower(SavedView.name) == payload.name.strip().lower())):
         raise HTTPException(409, "view name already exists")
@@ -839,7 +843,9 @@ def delete_smart_view(view_id: str, db: Session = Depends(get_db)):
 
 @app.get("/api/smart-views/query", response_model=list[TaskOut], dependencies=[Depends(auth)])
 def query_smart_view(period: str | None = Query(default=None, pattern="^(today|week)$"), overdue: bool = False, source: str | None = Query(default=None, max_length=40), priority: TaskPriority | None = None, blocked: bool = False, unplanned: bool = False, timezone_name: str = Query(default="Europe/Amsterdam", alias="timezone"), db: Session = Depends(get_db)):
-    filters = SmartViewFilters(period=period, overdue=overdue, source=source, priority=priority, blocked=blocked, unplanned=unplanned, timezone=timezone_name)
+    # The route pattern above already restricts this to the two literals the
+    # schema accepts; the cast only states that to the type checker.
+    filters = SmartViewFilters(period=cast(Literal["today", "week"] | None, period), overdue=overdue, source=source, priority=priority, blocked=blocked, unplanned=unplanned, timezone=timezone_name)
     return smart_view_query(filters, db)
 
 
@@ -1698,9 +1704,9 @@ def mcp_rpc(request: dict, db: Session = Depends(get_db)):
         elif name == "execution_start_action":
             result = start(arguments.get("action_id", ""), db)
         elif name == "execution_complete_action":
-            result = finish(arguments.get("session_id", ""), CompleteActionRequest.model_validate(arguments), db)
+            result = finish(arguments.get("session_id", ""), SessionResult.model_validate(arguments), db)
         elif name == "execution_mark_stuck":
-            result = finish(arguments.get("session_id", ""), CompleteActionRequest(session_id=arguments.get("session_id", ""), outcome=SessionOutcome.STUCK, stuck_reason=arguments.get("stuck_reason")), db)
+            result = finish(arguments.get("session_id", ""), SessionResult(outcome=SessionOutcome.STUCK, stuck_reason=arguments.get("stuck_reason")), db)
         else:
             result = create_message_draft(MessageDraft.model_validate(arguments))
     except (ValidationError, ValueError) as exc:

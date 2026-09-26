@@ -34,9 +34,17 @@ Voor lokale backend-tests:
 ```bash
 cd backend
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 alembic upgrade head
-pytest
+pytest --cov=app --cov-report=term-missing --cov-fail-under=75
+```
+
+Kwaliteitscontroles (dezelfde commando's als CI, vanuit de repository-root):
+
+```bash
+ruff check backend
+mypy backend/app
+cd frontend && npm ci && npm run typecheck && npm run build
 ```
 
 De API maakt bij import of startup geen tabellen meer automatisch aan. Voor een
