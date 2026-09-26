@@ -38,8 +38,19 @@ cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 alembic upgrade head
-pytest --cov=app --cov-report=term-missing --cov-fail-under=75
+pytest --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=75
+cd .. && python3 scripts/coverage_report.py --summary
 ```
+
+De dekking wordt gepubliceerd als `coverage.xml` in de repository-root. Dat is de
+enige plek waar een lezer — en de quality lane van de darkfactory — een percentage
+uit kan halen: een artifact verloopt en een regel in een CI-log is geen bewijs.
+`scripts/coverage_report.py` publiceert de meting van de run en haalt het
+volatiele `timestamp` eruit, zodat dezelfde meting altijd dezelfde bytes oplevert.
+CI doet exact hetzelfde en faalt daarna op `git diff --exit-code -- coverage.xml`
+als de gepubliceerde kopie de huidige boom niet meer beschrijft. Wie de dekking
+verandert, publiceert het rapport dus opnieuw in dezelfde pull request; CI pusht
+nooit zelf, want dat zou schrijfrechten op het workflow-token vragen.
 
 Kwaliteitscontroles (dezelfde commando's als CI, vanuit de repository-root):
 

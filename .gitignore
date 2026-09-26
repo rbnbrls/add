@@ -5,9 +5,12 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
-# Coverage output (CI uploads coverage.xml as an artifact; it is not committed)
+# Coverage output. `backend/coverage.xml` is the per-run report (CI uploads it as
+# an artifact); the published report is the normalised copy committed at the
+# repository root, `coverage.xml`, which is what a reader — and the darkfactory
+# quality lane — parses from the default branch. It must stay tracked.
 .coverage
-coverage.xml
+backend/coverage.xml
 
 # Frontend dependencies and build output
 node_modules/
