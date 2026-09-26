@@ -3,6 +3,13 @@ name: Build, test, promote
 on:
   push:
     branches: [main]
+  # A pull-request run is what makes the committed coverage report verifiable
+  # *before* the merge: the deploy jobs below are main-only (`github.ref`), so a
+  # pull request only builds and tests. Without this trigger a pull request
+  # carries no checks at all, and the report could only be proven stale after it
+  # had already landed on main.
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
