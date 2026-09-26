@@ -90,3 +90,53 @@ def test_preferences_default_and_update(workflow_client):
     assert response.status_code == 200
     assert client.get("/api/preferences").json()["workflow_badge_mode"] == "hidden"
     assert client.patch("/api/preferences", json={"workflow_badge_mode": "loud"}).status_code == 422
+
+
+def test_mail_polling_preference_is_persistent_and_gui_controlled(workflow_client):
+    client, _ = workflow_client
+    assert client.get("/api/preferences").json()["mail_poll_enabled"] is False
+    enabled = client.patch("/api/preferences", json={"workflow_badge_mode": "dot", "mail_poll_enabled": True})
+    assert enabled.status_code == 200
+    assert enabled.json()["mail_poll_enabled"] is True
+    assert client.get("/api/preferences").json()["mail_poll_enabled"] is True
+    disabled = client.patch("/api/preferences", json={"workflow_badge_mode": "dot", "mail_poll_enabled": False})
+    assert disabled.status_code == 200
+    assert disabled.json()["mail_poll_enabled"] is False
+
+
+def test_runtime_settings_are_saved_without_returning_secrets(workflow_client):
+    client, _ = workflow_client
+    response = client.patch("/api/preferences", json={
+        "workflow_badge_mode": "dot",
+        "api_cors_origins": "https://add.example, http://localhost:3000",
+        "secure_cookies": True,
+        "mail_poll_interval_seconds": 600,
+        "mail_sync_batch_size": 10,
+        "mail_auto_cleanup_confidence": .995,
+        "github_repo": "owner/project",
+        "api_token": "runtime-secret",
+        "github_token": "github-secret",
+    })
+    assert response.status_code == 200
+    body = response.json()
+    assert body["secure_cookies"] is True
+    assert body["mail_poll_interval_seconds"] == 600
+    assert "runtime-secret" not in response.text
+    assert "github-secret" not in response.text
+
+
+def test_first_start_requires_local_password_before_setup_is_complete(workflow_client):
+    client, _ = workflow_client
+    initial = client.get("/api/auth/status")
+    assert initial.status_code == 200
+    assert initial.json()["first_start_required"] is True
+
+    setup = client.post("/api/auth/setup", json={"password": "a-safe-local-password"})
+    assert setup.status_code == 200
+    configured = client.get("/api/auth/status").json()
+    assert configured["first_start_required"] is False
+    assert configured["enabled"] is True
+
+    login = client.post("/api/auth/login", json={"password": "a-safe-local-password"})
+    assert login.status_code == 200
+    assert client.get("/api/auth/status").json()["authenticated"] is True
