@@ -7,6 +7,7 @@ the persisted record.
 from __future__ import annotations
 
 import email
+import email.utils
 import imaplib
 import json
 from dataclasses import dataclass, field

@@ -1,0 +1,13 @@
+# Development and CI tooling for the backend.
+#
+# CI installs this file instead of requirements.txt so that the lint, type-check
+# and coverage steps run with exactly the versions a developer gets locally.
+# The runtime image (Dockerfile) installs requirements.txt only.
+
+-r requirements.txt
+
+# Linter and type checker. Run from the repository root:
+#   ruff check backend
+#   mypy backend/app
+ruff==0.15.22
+mypy==2.3.1

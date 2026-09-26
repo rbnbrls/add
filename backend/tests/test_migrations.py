@@ -8,7 +8,6 @@ from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 
 from app.config import settings
-from app.db import Base
 
 
 BACKEND = Path(__file__).parents[1]

@@ -1,0 +1,16 @@
+# Coverage configuration for the backend test suite.
+#
+# Coverage finds this file because the suite runs with `backend/` as the working
+# directory (see .github/workflows/deploy.yml and AGENTS.md). The enforced
+# threshold is deliberately NOT duplicated here: the single source of truth for
+# the gate is the `--cov-fail-under` value on the "Run backend tests with
+# coverage" step in .github/workflows/deploy.yml, so the number that breaks a
+# build cannot drift away from the number CI reports.
+
+[tool.coverage.run]
+source = ["app"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+precision = 1
