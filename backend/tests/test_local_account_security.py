@@ -39,10 +39,12 @@ def test_local_login_gates_the_credential_store(client):
     assert http.post("/api/auth/setup", json={"password": PASSWORD}).json() == {"configured": True}
     assert http.post("/api/auth/setup", json={"password": PASSWORD}).status_code == 409
 
-    assert http.get("/api/auth/status").json() == {
-        "enabled": True, "login_configured": True,
-        "encryption_configured": bool(settings.credential_encryption_key), "authenticated": False,
-    }
+    # The response may carry additional bootstrap fields; assert the ones this
+    # test is about instead of the whole document.
+    status = http.get("/api/auth/status").json()
+    assert status["enabled"] is True and status["login_configured"] is True
+    assert status["authenticated"] is False
+    assert status["encryption_configured"] is bool(settings.credential_encryption_key)
     assert http.get("/api/security/credentials").status_code == 401
     assert http.post("/api/auth/login", json={"password": "verkeerd-wachtwoord"}).status_code == 401
     assert http.post("/api/auth/login", json={"password": PASSWORD}).json() == {"authenticated": True, "enabled": True}

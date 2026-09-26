@@ -25,9 +25,10 @@ from .decomposition import decompose_task, item_from_child, remove_existing_chil
 from .db import SessionLocal, get_db
 from .domain import check_day_rollover, choose_action, daily_completion_counts, day_window, delete_task, finish_accountability, finish_session, pause_session, resolve_blocked_action, resume_session, start_accountability, start_action, validate_parent
 from .llm import LLMError, LLMGateway, fetch_openrouter_free_models
-from .models import AccountabilitySession, Action, ActionStatus, AppPreference, BackupSnapshot, CompletionLog, DecompositionStatus, ExecutionSession, IntegrationCredential, LocalAccount, OutboxEvent, PlanBlock, PlanningDecision, ReminderPreference, Routine, RoutineOccurrence, SavedView, SessionOutcome, SuggestionStatus, Task, TaskDecompositionItem, TaskDecompositionProposal, TaskPriority, TaskRolloverEvent, TaskStatus, TaskSuggestionRecord
-from .schemas import AccountabilityFinishRequest, AccountabilityOut, AccountabilityStartRequest, ActionCreate, ActionOut, AppPreferenceOut, AppPreferenceUpdate, BlockTaskRequest, BrainDumpProposal, CompletionOut, DailyReviewCompleteOut, DailyReviewCompleteRequest, DayCheckRequest, DecompositionApprovalRequest, DecompositionApprovalOut, DecompositionProposalOut, DecompositionRequest, FreeLLMModelCatalogOut, HAContext, HAEvent, LLMSettingsOut, MessageDraft, NaturalLanguageCaptureRequest, NaturalLanguageCaptureResponse, OfflineCompletion, PlanBlockCreate, PlanBlockOut, PlanSuggestionRequest, PlanningDecisionOut, ReminderSettings, ResolveBlockedActionRequest, ReplanRequest, RoutineCreate, RoutineOut, SendMessageRequest, SessionResult, SmartViewCreate, SmartViewFilters, SmartViewOut, StartOut, SuggestionApproval, SuggestionOut, TaskCreate, TaskOut, TaskUpdate, TaskSuggestion, TodayStatus, TextRewriteRequest, TextRewriteResponse, ToneAnalysisRequest, ToneAnalysisResponse, WorkflowSummaryOut
-from .security import credential_box, read_encrypted_credential
+from .models import AccountabilitySession, Action, ActionStatus, AppPreference, BackupSnapshot, CompletionLog, DecompositionStatus, ExecutionSession, IntegrationCredential, LocalAccount, MailAccount, MailAccountStatus, MailActionAudit, MailMessage, MailProvider, MailSyncLease, OutboxEvent, PlanBlock, PlanningDecision, ReminderPreference, Routine, RoutineOccurrence, SavedView, SessionOutcome, SuggestionStatus, Task, TaskDecompositionItem, TaskDecompositionProposal, TaskPriority, TaskRolloverEvent, TaskStatus, TaskSuggestionRecord
+from .schemas import AccountabilityFinishRequest, AccountabilityOut, AccountabilityStartRequest, ActionCreate, ActionOut, AppPreferenceOut, AppPreferenceUpdate, BlockTaskRequest, BrainDumpProposal, CompletionOut, DailyReviewCompleteOut, DailyReviewCompleteRequest, DayCheckRequest, DecompositionApprovalRequest, DecompositionApprovalOut, DecompositionProposalOut, DecompositionRequest, FreeLLMModelCatalogOut, HAContext, HAEvent, LLMSettingsOut, MailAccountCreate, MailAccountOut, MailActionRequest, MailMessageOut, MessageDraft, NaturalLanguageCaptureRequest, NaturalLanguageCaptureResponse, OfflineCompletion, PlanBlockCreate, PlanBlockOut, PlanSuggestionRequest, PlanningDecisionOut, ReminderSettings, ResolveBlockedActionRequest, ReplanRequest, RoutineCreate, RoutineOut, SendMessageRequest, SessionResult, SmartViewCreate, SmartViewFilters, SmartViewOut, StartOut, SuggestionApproval, SuggestionOut, TaskCreate, TaskOut, TaskUpdate, TaskSuggestion, TodayStatus, TextRewriteRequest, TextRewriteResponse, ToneAnalysisRequest, ToneAnalysisResponse, WorkflowSummaryOut
+from .security import credential_box, read_encrypted_credential, read_json_credential
+from .mail import GmailAdapter, GraphAdapter, ImapAdapter, MailAdapter, MailItem, classify
 from .text_assistance import analyze_tone, rewrite_text
 from .github_issue import create_github_issue
 
@@ -118,7 +119,6 @@ def password_matches(password: str, stored: str) -> bool:
 
 def auth(x_add_token: str | None = Header(default=None), add_session: str | None = Cookie(default=None), db: Session = Depends(get_db)):
     account = db.scalar(select(LocalAccount))
-    preference = db.scalar(select(AppPreference).order_by(AppPreference.id.asc()))
     configured_api_token = read_encrypted_credential(db, "runtime:add-api-token") or settings.add_api_token
     if account or settings.local_login_password:
         if add_session != settings.session_secret: raise HTTPException(401, "login required")
@@ -236,7 +236,7 @@ def sync_mailboxes(db: Session, owner: str = "manual") -> dict:
                         db.add(TaskSuggestionRecord(title=item.subject[:240], description=(item.snippet or "")[:4000], source_type="mail", source_ref=source_ref, original_input=(item.snippet or "")[:4000], suggested_next_action=f"Lees en beoordeel: {item.subject}"[:300], confidence=result.confidence, batch_id=account.id))
             account.sync_cursor = cursor; account.last_synced_at = datetime.now(timezone.utc); account.last_error = None
             db.commit()
-        except Exception as exc:
+        except Exception:
             db.rollback(); account.last_error = "mail sync failed"; account.status = MailAccountStatus.ERROR; db.commit(); errors.append(account.id)
     lease = db.get(MailSyncLease, "global")
     if lease and lease.owner == owner: db.delete(lease); db.commit()
@@ -1956,6 +1956,23 @@ def mcp_rpc(request: dict, db: Session = Depends(get_db)):
             result = finish(arguments.get("session_id", ""), SessionResult.model_validate(arguments), db)
         elif name == "execution_mark_stuck":
             result = finish(arguments.get("session_id", ""), SessionResult(outcome=SessionOutcome.STUCK, stuck_reason=arguments.get("stuck_reason")), db)
+        elif name == "get_mail_summary":
+            result = mail_summary(db)
+        elif name == "get_mail_triage_queue":
+            result = mail_triage_queue(db)
+        elif name == "approve_mail_action":
+            result = mail_message_action(arguments.get("message_id", ""), MailActionRequest.model_validate(arguments), db)
+        elif name == "retry_mail_sync":
+            result = sync_mailboxes(db, f"mcp:{uuid4()}")
+        elif name == "create_task_from_email":
+            message = db.get(MailMessage, arguments.get("message_id", ""))
+            if not message: raise ValueError("mail message not found")
+            source_ref = f"{message.account_id}:{message.provider_message_id}"
+            result = external_suggestion(db, "mail", source_ref) or suggestion(TaskSuggestion(title=message.subject, description=message.snippet, source_type="mail", source_ref=source_ref, suggested_next_action=f"Lees en beoordeel: {message.subject}", confidence=message.confidence or 0), db)
+        elif name == "draft_reply_from_email":
+            message = db.get(MailMessage, arguments.get("message_id", ""))
+            if not message: raise ValueError("mail message not found")
+            result = create_message_draft(MessageDraft(recipient=message.sender or "onbekende afzender", body=f"Conceptantwoord op: {message.subject}"))
         else:
             result = create_message_draft(MessageDraft.model_validate(arguments))
     except (ValidationError, ValueError) as exc:

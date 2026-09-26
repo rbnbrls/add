@@ -87,7 +87,7 @@ def test_provider_intake_is_idempotent_for_external_message_id(client):
 
 
 def test_mail_account_sync_is_rules_first_and_creates_review_proposal(client, monkeypatch):
-    account = client.post("/api/mail/accounts", json={"name": "Test", "provider": "gmail", "address": "me@example.com", "credential": {"access_token": "test"}}).json()
+    client.post("/api/mail/accounts", json={"name": "Test", "provider": "gmail", "address": "me@example.com", "credential": {"access_token": "test"}})
 
     class Adapter:
         def fetch(self, cursor, limit):
