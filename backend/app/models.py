@@ -143,6 +143,13 @@ class AppPreference(Base):
     __tablename__ = "app_preferences"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     workflow_badge_mode: Mapped[str] = mapped_column(String(10), default="dot", server_default="dot", nullable=False)
+    mail_poll_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", nullable=False)
+    api_cors_origins: Mapped[str] = mapped_column(String(500), default="http://localhost:3000,http://127.0.0.1:3000", server_default="http://localhost:3000,http://127.0.0.1:3000", nullable=False)
+    secure_cookies: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", nullable=False)
+    mail_poll_interval_seconds: Mapped[int] = mapped_column(Integer, default=900, server_default="900", nullable=False)
+    mail_sync_batch_size: Mapped[int] = mapped_column(Integer, default=25, server_default="25", nullable=False)
+    mail_auto_cleanup_confidence: Mapped[float] = mapped_column(Float, default=.99, server_default="0.99", nullable=False)
+    github_repo: Mapped[str] = mapped_column(String(240), default="rbnbrls/add", server_default="rbnbrls/add", nullable=False)
     task_assistant_prompt: Mapped[str] = mapped_column(Text, default="Help me decompose this task into concrete, small next steps and improve its description.", nullable=False)
     llm_provider: Mapped[str] = mapped_column(String(40), default="openrouter", nullable=False)
     llm_base_url: Mapped[str] = mapped_column(String(240), default="https://openrouter.ai/api/v1", nullable=False)
@@ -270,6 +277,67 @@ class IntegrationCredential(Base):
     provider: Mapped[str] = mapped_column(String(40), unique=True)
     encrypted_value: Mapped[str] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class MailProvider(str, Enum):
+    GMAIL = "gmail"; OUTLOOK = "outlook"; IMAP = "imap"
+
+
+class MailAccountStatus(str, Enum):
+    ACTIVE = "active"; PAUSED = "paused"; ERROR = "error"
+
+
+class MailAccount(Base):
+    __tablename__ = "mail_accounts"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    provider: Mapped[MailProvider] = mapped_column(SAEnum(MailProvider), nullable=False)
+    address: Mapped[str] = mapped_column(String(320), nullable=False)
+    status: Mapped[MailAccountStatus] = mapped_column(SAEnum(MailAccountStatus), default=MailAccountStatus.ACTIVE, nullable=False)
+    credential_provider: Mapped[str] = mapped_column(String(120), nullable=False)
+    sync_cursor: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class MailMessage(Base):
+    __tablename__ = "mail_messages"
+    __table_args__ = (UniqueConstraint("account_id", "provider_message_id", name="uq_mail_account_message"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    account_id: Mapped[str] = mapped_column(ForeignKey("mail_accounts.id"), nullable=False)
+    provider_message_id: Mapped[str] = mapped_column(String(500), nullable=False)
+    thread_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    sender: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    subject: Mapped[str] = mapped_column(String(500), nullable=False)
+    snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    headers: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
+    provider_spam: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    category: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    triage_status: Mapped[str] = mapped_column(String(30), default="new", nullable=False)
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class MailActionAudit(Base):
+    __tablename__ = "mail_action_audit"
+    __table_args__ = (UniqueConstraint("message_id", "action", name="uq_mail_message_action"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    message_id: Mapped[str] = mapped_column(ForeignKey("mail_messages.id"), nullable=False)
+    action: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
+    detail: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MailSyncLease(Base):
+    __tablename__ = "mail_sync_leases"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    owner: Mapped[str] = mapped_column(String(120), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class LocalAccount(Base):

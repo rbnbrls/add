@@ -12,7 +12,7 @@ const items: NavItem[] = [
   { label: "Dagreview", href: "/daily-review", key: "review" },
 ];
 
-export default function GlobalNav() {
+export default function GlobalNav({ authenticated, onLogout }: { authenticated: boolean; onLogout: () => void | Promise<void> }) {
   const pathname = usePathname();
   const [isLater, setIsLater] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
@@ -84,8 +84,9 @@ export default function GlobalNav() {
         ))}
       </div>
       <div className="global-nav-tools">
-        <button className="feedback-button" type="button" onClick={() => { setFeedbackState("idle"); setFeedbackOpen(true); }} aria-haspopup="dialog">Feedback</button>
+        {authenticated && <button className="feedback-button" type="button" onClick={() => { setFeedbackState("idle"); setFeedbackOpen(true); }} aria-haspopup="dialog">Feedback</button>}
         <a href="/settings" className={pathname === "/settings" ? "is-active" : undefined} aria-current={pathname === "/settings" ? "page" : undefined}>Instellingen</a>
+        {authenticated && <button className="feedback-button" type="button" onClick={() => void onLogout()}>Uitloggen</button>}
       </div>
       {feedbackOpen && <div className="feedback-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeFeedback(); }}>
         <section className="feedback-modal" role="dialog" aria-modal="true" aria-labelledby="feedback-title-heading">

@@ -12,6 +12,8 @@ ADD (Activation, Do, Done) is een self-hosted execution app voor mensen die voor
 - Hermes MCP/API-contracten voor suggesties, huidige actie en sessies.
 - Home Assistant interface voor home/away-context en todo-mirror.
 - PostgreSQL-ready productieopstelling; geen Redis/worker in de eerste versie.
+- Mail intake voor Gmail, Outlook/Graph en IMAP met rules-first triage; de
+  optionele 15-minuten poller blijft zonder Redis of aparte worker draaien.
 
 ## Quick start
 
@@ -34,9 +36,28 @@ Voor lokale backend-tests:
 ```bash
 cd backend
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 alembic upgrade head
-pytest
+pytest --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=75
+cd .. && python3 scripts/coverage_report.py --summary
+```
+
+De dekking wordt gepubliceerd als `coverage.xml` in de repository-root. Dat is de
+enige plek waar een lezer — en de quality lane van de darkfactory — een percentage
+uit kan halen: een artifact verloopt en een regel in een CI-log is geen bewijs.
+`scripts/coverage_report.py` publiceert de meting van de run en haalt het
+volatiele `timestamp` eruit, zodat dezelfde meting altijd dezelfde bytes oplevert.
+CI doet exact hetzelfde en faalt daarna op `git diff --exit-code -- coverage.xml`
+als de gepubliceerde kopie de huidige boom niet meer beschrijft. Wie de dekking
+verandert, publiceert het rapport dus opnieuw in dezelfde pull request; CI pusht
+nooit zelf, want dat zou schrijfrechten op het workflow-token vragen.
+
+Kwaliteitscontroles (dezelfde commando's als CI, vanuit de repository-root):
+
+```bash
+ruff check backend
+mypy backend/app
+cd frontend && npm ci && npm run typecheck && npm run build
 ```
 
 De API maakt bij import of startup geen tabellen meer automatisch aan. Voor een

@@ -1,0 +1,14 @@
+# Coverage configuration for the ADD backend.
+#
+# `coverage` and `pytest-cov` are pinned in requirements.txt because the report
+# records the analyzer version (`<coverage version="...">`), so an unpinned
+# upgrade would rewrite a committed file without measuring anything differently.
+#
+# `relative_files` is what makes the published report machine-independent. Without
+# it `coverage xml` writes the absolute checkout path into `<sources>`
+# (`/home/hermes/.../backend/app` here, `/home/runner/work/add/add/backend/app`
+# in CI), so a report committed from one machine could never match a fresh run on
+# another and the CI staleness check would be red on every push. With it, the
+# report describes the measurement and nothing about where it ran.
+[run]
+relative_files = True

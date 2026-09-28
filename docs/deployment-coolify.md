@@ -24,7 +24,11 @@ URL-verificatie in de workflow. [Coolify deploy webhooks](https://coolify.io/doc
 
 Maak in GitHub Actions de volgende repository-secrets aan:
 
-- `COOLIFY_TEST_WEBHOOK` en `COOLIFY_TEST_TOKEN` — verplicht voor de testjob. Een
+- `COOLIFY_TEST_WEBHOOK` en `COOLIFY_TEST_TOKEN` — nodig om de testjob naar Coolify
+  te laten deployen. Als de webhook correct is maar Coolify `404 No resources
+  found` teruggeeft, markeert de workflow de deployment als overgeslagen en
+  blijft build/test groen; configureer daarna de webhook voor de actuele
+  testresource. Een lege webhook of token blijft een configuratiefout. Een
   authenticated deploy webhook heeft de vorm
   `https://dev.7rb.nl/api/v1/deploy?uuid=<app-uuid>` en wordt aangeroepen met
   `Authorization: Bearer <coolify-api-token>`; de waarden horen bij de Coolify-app

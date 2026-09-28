@@ -118,7 +118,6 @@ def test_smart_views_are_bounded_read_only_and_timezone_aware(capture_client):
 
 def test_daily_review_exposes_one_next_decision_without_mutating_state(capture_client):
     client, session_factory = capture_client
-    now = datetime.now(timezone.utc)
     with session_factory() as db:
         db.add(TaskSuggestionRecord(title="Review voorstel", source_type="shortcut", original_input="Review", suggested_next_action="Open", confidence=0.8, status=SuggestionStatus.PENDING))
         db.add(Task(title="Ongepland werk", status=TaskStatus.INBOX, source_type="manual"))

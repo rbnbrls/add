@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.db import Base, get_db
 from app.main import app, get_llm_gateway
-from app.models import Action, Task
+from app.models import Action
 from app.schemas import DecompositionResult, DecompositionChild
 
 

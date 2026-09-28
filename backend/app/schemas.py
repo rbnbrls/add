@@ -137,6 +137,13 @@ class WorkflowSummaryOut(BaseModel):
 
 class AppPreferenceOut(BaseModel):
     workflow_badge_mode: Literal["hidden", "dot", "count"]
+    mail_poll_enabled: bool
+    api_cors_origins: str
+    secure_cookies: bool
+    mail_poll_interval_seconds: int
+    mail_sync_batch_size: int
+    mail_auto_cleanup_confidence: float
+    github_repo: str
     task_assistant_prompt: str
     llm_provider: str
     llm_base_url: str
@@ -164,11 +171,20 @@ class FreeLLMModelCatalogOut(BaseModel):
 
 class AppPreferenceUpdate(BaseModel):
     workflow_badge_mode: Literal["hidden", "dot", "count"]
+    mail_poll_enabled: bool | None = None
     task_assistant_prompt: str | None = Field(default=None, min_length=1, max_length=2000)
     llm_provider: Literal["openrouter"] | None = None
     llm_base_url: str | None = Field(default=None, min_length=1, max_length=240)
     llm_model: str | None = Field(default=None, min_length=1, max_length=160)
     llm_api_key: str | None = Field(default=None, max_length=500)
+    api_cors_origins: str | None = Field(default=None, max_length=500)
+    secure_cookies: bool | None = None
+    mail_poll_interval_seconds: int | None = Field(default=None, ge=60, le=86400)
+    mail_sync_batch_size: int | None = Field(default=None, ge=1, le=100)
+    mail_auto_cleanup_confidence: float | None = Field(default=None, ge=0.5, le=1)
+    github_repo: str | None = Field(default=None, min_length=3, max_length=240)
+    api_token: str | None = Field(default=None, max_length=500)
+    github_token: str | None = Field(default=None, max_length=500)
 
 
 class DecompositionApprovalRequest(BaseModel):
@@ -432,6 +448,41 @@ class SuggestionOut(BaseModel):
     task_id: str | None
     created_at: datetime
     model_config = {"from_attributes": True}
+
+
+class MailAccountCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    provider: Literal["gmail", "outlook", "imap"]
+    address: str = Field(min_length=3, max_length=320)
+    credential: dict = Field(default_factory=dict)
+
+
+class MailAccountOut(BaseModel):
+    id: str
+    name: str
+    provider: str
+    address: str
+    status: str
+    last_synced_at: datetime | None
+    last_error: str | None
+    created_at: datetime
+
+
+class MailMessageOut(BaseModel):
+    id: str
+    account_id: str
+    subject: str
+    sender: str | None
+    snippet: str | None
+    category: str | None
+    confidence: float | None
+    triage_status: str
+    received_at: datetime | None
+    created_at: datetime
+
+
+class MailActionRequest(BaseModel):
+    action: Literal["archive", "trash", "unsubscribe"]
 
 
 class NaturalLanguageCaptureResponse(BaseModel):

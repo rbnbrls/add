@@ -31,7 +31,7 @@ def test_hermes_suggestion_requires_approval(client):
     assert all(t["title"] != "Belasting" for t in client.get("/api/tasks").json())
     approved = client.post(f"/api/mcp/task-suggestions/{created['id']}/approve").json()
     assert approved["title"] == "Belasting"
-    assert client.get(f"/api/mcp/task-suggestions?status=accepted").json()[0]["task_id"] == approved["id"]
+    assert client.get("/api/mcp/task-suggestions?status=accepted").json()[0]["task_id"] == approved["id"]
 
 
 def test_inbox_decision_sets_urgent_priority(client):
@@ -86,6 +86,44 @@ def test_provider_intake_is_idempotent_for_external_message_id(client):
     assert len(client.get("/api/mcp/task-suggestions?status=pending").json()) == 1
 
 
+def test_mail_account_sync_is_rules_first_and_creates_review_proposal(client, monkeypatch):
+    client.post("/api/mail/accounts", json={"name": "Test", "provider": "gmail", "address": "me@example.com", "credential": {"access_token": "test"}})
+
+    class Adapter:
+        def fetch(self, cursor, limit):
+            from app.mail import MailItem
+            return [MailItem("message-1", "Newsletter", "news@example.com", "Lees dit", headers={"list-unsubscribe": "<https://example.com/unsub>"})], "next"
+        def archive(self, item): raise AssertionError("newsletter should use unsubscribe")
+        def move_to_trash(self, item): pass
+        def unsubscribe(self, item): pass
+
+    monkeypatch.setattr("app.main._mail_adapter", lambda account, db: Adapter())
+    synced = client.post("/api/mail/sync")
+    assert synced.status_code == 200
+    assert synced.json()["automatic_actions"] == 1
+    assert client.get("/api/mail/summary").json()["messages"] == 1
+    assert client.get("/api/mcp/task-suggestions?status=pending").json() == []
+
+
+def test_mail_unknown_creates_pending_suggestion_without_task_mutation(client, monkeypatch):
+    client.post("/api/mail/accounts", json={"name": "Test", "provider": "imap", "address": "me@example.com", "credential": {}})
+
+    class Adapter:
+        def fetch(self, cursor, limit):
+            from app.mail import MailItem
+            return [MailItem("message-2", "Question", "person@example.com", "Can you help?", headers={})], None
+        def archive(self, item): pass
+        def move_to_trash(self, item): pass
+        def unsubscribe(self, item): pass
+
+    monkeypatch.setattr("app.main._mail_adapter", lambda account, db: Adapter())
+    response = client.post("/api/mail/sync")
+    assert response.json()["created"] == 1
+    proposals = client.get("/api/mcp/task-suggestions?status=pending").json()
+    assert len(proposals) == 1 and proposals[0]["source_type"] == "mail"
+    assert client.get("/api/tasks").json() == []
+
+
 def test_reviewed_suggestion_can_be_planned_and_undone(client):
     created = client.post("/api/mcp/task-suggestions", json={"title": "Planbare taak", "suggested_next_action": "Open dossier", "confidence": .8}).json()
     start = (datetime.now(timezone.utc) + timedelta(days=1)).replace(second=0, microsecond=0)
@@ -94,19 +132,19 @@ def test_reviewed_suggestion_can_be_planned_and_undone(client):
     body = planned.json()
     assert body["destination"] == "at"
     assert body["block"]["task_title"] == "Planbare taak"
-    assert client.get(f"/api/mcp/task-suggestions?status=accepted").json()[0]["task_id"] == body["task_id"]
+    assert client.get("/api/mcp/task-suggestions?status=accepted").json()[0]["task_id"] == body["task_id"]
     assert client.post(f"/api/inbox/review/{created['id']}/plan", json={"destination": "inbox"}).status_code == 409
     undone = client.post("/api/planning/undo")
     assert undone.status_code == 200
     assert undone.json()["destination"] == "undone"
-    assert client.get(f"/api/mcp/task-suggestions?status=pending").json()[0]["id"] == created["id"]
+    assert client.get("/api/mcp/task-suggestions?status=pending").json()[0]["id"] == created["id"]
     assert all(item["id"] != body["task_id"] for item in client.get("/api/tasks").json())
 
 
 def test_replan_is_explicit_idempotent_and_rejects_past_or_overlap(client):
     start = (datetime.now(timezone.utc) + timedelta(days=1)).replace(second=0, microsecond=0)
     task = client.post("/api/tasks", json={"title": "Replanbare taak", "next_action": {"text": "Open dossier"}}).json()
-    block = client.post("/api/plan-blocks", json={"task_id": task["id"], "start_at": start.isoformat(), "end_at": (start + timedelta(minutes=30)).isoformat()}).json()
+    client.post("/api/plan-blocks", json={"task_id": task["id"], "start_at": start.isoformat(), "end_at": (start + timedelta(minutes=30)).isoformat()}).json()
     same = client.post(f"/api/tasks/{task['id']}/replan", json={"destination": "at", "start_at": start.isoformat(), "duration_minutes": 30})
     assert same.status_code == 200 and same.json()["idempotent"] is True
     assert client.post(f"/api/tasks/{task['id']}/replan", json={"destination": "at", "start_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(), "duration_minutes": 30}).status_code == 422
@@ -153,7 +191,7 @@ def test_json_rpc_lists_tools_and_creates_pending_suggestion(client):
 
 
 def test_mcp_endpoint_supports_execution_lifecycle(client):
-    task = client.post("/api/tasks", json={"title": "RPC lifecycle", "next_action": {"text": "Do the step"}}).json()
+    client.post("/api/tasks", json={"title": "RPC lifecycle", "next_action": {"text": "Do the step"}})
     action = client.get("/api/now").json()
     started = client.post("/api/mcp", json={"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "execution_start_action", "arguments": {"action_id": action["id"]}}}).json()
     session_id = started["result"]["content"][0]["json"]["session_id"]

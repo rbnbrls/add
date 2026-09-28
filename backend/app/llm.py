@@ -1,5 +1,5 @@
 import json
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -9,6 +9,11 @@ from sqlalchemy import select
 from .config import Settings, settings
 from .security import read_encrypted_credential
 from .models import AppPreference
+
+#: The gateway returns whichever schema the caller asked for. Without the
+#: TypeVar every caller would receive a bare ``BaseModel`` and every schema
+#: attribute access at the call site would be unverifiable.
+ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 class LLMError(Exception):
@@ -115,8 +120,8 @@ class LLMGateway:
         *,
         system_prompt: str,
         user_prompt: str,
-        response_model: type[BaseModel],
-    ) -> BaseModel:
+        response_model: type[ModelT],
+    ) -> ModelT:
         preference = self.db.scalar(select(AppPreference).order_by(AppPreference.id.asc()))
         base_url = preference.llm_base_url if preference else self.config.llm_base_url
         model = preference.llm_model if preference else self.config.llm_model

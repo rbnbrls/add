@@ -1,0 +1,15 @@
+# Ruff configuration for the ADD backend (and any Python added later).
+#
+# The rule set is the bug-finding half of the flake8 family — E4 (imports),
+# E7 (statements), E9 (runtime/syntax) and F (pyflakes) — rather than a
+# formatting rule set. This repository predates the configuration and its
+# compact "one statement per line" style is deliberate, so E701/E702 are
+# excluded instead of being mass-rewritten (which would bury real changes in
+# whitespace). Line length is not enforced for the same reason: there is no
+# formatter in this repository, so a length rule would only add noise.
+
+target-version = "py312"
+
+[lint]
+select = ["E4", "E7", "E9", "F"]
+ignore = ["E701", "E702"]
