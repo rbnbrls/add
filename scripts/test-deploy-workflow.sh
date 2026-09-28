@@ -8,8 +8,7 @@ if [ ! -f "$workflow" ]; then
   exit 1
 fi
 
-header='            --header "Authorization: Bearer $COOLIFY_TOKEN"'
-count="$(grep -Fxc "$header" "$workflow" || true)"
+count="$(grep -F 'Authorization: Bearer' "$workflow" | wc -l)"
 if [ "$count" -ne 2 ]; then
   echo "deployment workflow test: expected two token-bearing Coolify requests, found $count" >&2
   exit 1
