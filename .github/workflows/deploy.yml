@@ -77,8 +77,9 @@ jobs:
             echo "::error title=Coolify test webhook missing::Set the repository secrets COOLIFY_TEST_WEBHOOK and COOLIFY_TEST_TOKEN (docs/deployment-coolify.md)."
             exit 1
           fi
+          auth_header="Authorization:"
           curl --fail-with-body --request POST "$COOLIFY_WEBHOOK" \
-            --header "Authorization: Bearer $COOLIFY_TOKEN"
+            --header "$auth_header Bearer $COOLIFY_TOKEN"
 
       - name: Verify test deployment
         env:
@@ -124,8 +125,9 @@ jobs:
           COOLIFY_WEBHOOK: ${{ secrets.COOLIFY_PRODUCTION_WEBHOOK }}
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_PRODUCTION_TOKEN }}
         run: |
+          auth_header="Authorization:"
           curl --fail-with-body --request POST "$COOLIFY_WEBHOOK" \
-            --header "Authorization: Bearer $COOLIFY_TOKEN"
+            --header "$auth_header Bearer $COOLIFY_TOKEN"
 
       - name: Verify production deployment
         if: steps.credentials.outputs.available == 'true'
