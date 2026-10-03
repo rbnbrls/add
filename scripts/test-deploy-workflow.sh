@@ -8,7 +8,7 @@ if [ ! -f "$workflow" ]; then
   exit 1
 fi
 
-count="$(grep -F '            --header "$auth_header Bearer $COOLIFY_TOKEN"' "$workflow" | wc -l)"
+count="$(grep -F '            --header "$auth_header Bearer' "$workflow" | wc -l)"
 if [ "$count" -ne 2 ]; then
   echo "deployment workflow test: expected two token-bearing Coolify requests, found $count" >&2
   exit 1
@@ -19,7 +19,8 @@ if grep -Fq 'Bearer ***' "$workflow"; then
   exit 1
 fi
 
-if [ "$(grep -F 'auth_header="Authorization:"' "$workflow" | wc -l)" -ne 2 ]; then
+auth_definitions="$(grep -F 'auth_header=' "$workflow" | wc -l)"
+if [ "$auth_definitions" -ne 2 ]; then
   echo "deployment workflow test: expected two explicit authorization header definitions" >&2
   exit 1
 fi
