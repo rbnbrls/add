@@ -1,5 +1,9 @@
 # ADD — product roadmap
 
+> De actuele open backlog staat in [`PRODUCT_BACKLOG.md`](../PRODUCT_BACKLOG.md).
+> Dit document bevat de volledige roadmap, productbeslissingen en historische
+> acceptance-notes.
+
 Dit document is de enige roadmap voor ADD. `docs/plan.md` bevat geen tweede planning; het verwijst alleen naar dit document.
 
 ## Productdoel

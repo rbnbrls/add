@@ -82,7 +82,8 @@ De UI mag maximaal één primaire actie tegelijk presenteren. Alternatieven zijn
 - [Integrations](docs/integrations.md)
 - [API contracts](docs/api-contracts.md)
 - [Coolify deployment](docs/deployment-coolify.md)
-- [Roadmap and backlog](docs/roadmap.md)
+- [Product backlog](PRODUCT_BACKLOG.md)
+- [Roadmap and product history](docs/roadmap.md)
 - [Agent instructions](AGENTS.md)
 
 ## Status
